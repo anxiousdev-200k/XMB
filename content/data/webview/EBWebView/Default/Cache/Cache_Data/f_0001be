@@ -517,6 +517,10 @@ async function boot() {
     document.body.classList.remove("clock-loading", "boot-loading");
     try { infobox.stopSpin(); } catch (e) {}
   };
+  let displaySwitchError = null;
+  if (settings.switchToTv) {
+    try { await call("switch_to_tv"); } catch (e) { displaySwitchError = e; }
+  }
   // logged out (Users > Log Out): straight back to the user selection, no intro
   // and no Automatic Login
   let loggedOut = false;
@@ -581,6 +585,17 @@ async function boot() {
   audio.release();
   // (the System can't save in its own folder: said once, at the start)
   try { const w = await call("content_writable"); if (w && w.ok === false) xmb.warnNotWritable(w.dir); } catch (e) {}
+  if (displaySwitchError) {
+    const showDisplaySwitchError = () => {
+      if (xmb.overlay) { setTimeout(showDisplaySwitchError, 500); return; }
+      xmb.overlay = xmb.confirm;
+      xmb.confirm.open(`Could not switch to the TV display.\n${String(displaySwitchError)}`,
+        [{ label: "OK", id: "ok" }],
+        () => { xmb.confirm.close(); xmb.overlay = null; },
+        () => { xmb.confirm.close(); xmb.overlay = null; });
+    };
+    showDisplaySwitchError();
+  }
   // Buffering Sound (System Settings, Off by default): the loop plays all the time
   audio.setBuffering((xmb.settings?.behavior?.bufferingSound ?? settings.behavior?.bufferingSound) === true);
 }

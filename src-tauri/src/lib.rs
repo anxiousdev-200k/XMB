@@ -6,6 +6,7 @@ mod audio;
 mod copies;
 mod browser;
 mod cursorlock;
+mod display;
 mod focus;
 mod gameart;
 mod screenshot;
@@ -414,6 +415,11 @@ fn set_autostart(app: AppHandle, enable: bool) -> Result<(), String> {
 #[tauri::command]
 fn set_fullscreen(app: AppHandle, enable: bool) {
     apply_fullscreen(&app, enable);
+}
+
+#[tauri::command]
+fn switch_to_tv() -> Result<(), String> {
+    display::switch_to_tv()
 }
 
 /// Windowed mode: size the window's inside to `width` x `height` pixels
@@ -898,6 +904,7 @@ pub fn run() {
             save_settings,
             set_autostart,
             set_fullscreen,
+            switch_to_tv,
             set_window_resolution,
             icon_shades_load,
             video::video_info,
@@ -943,6 +950,11 @@ pub fn run() {
             screenshot::browser_snapshot,
             list_psn_avatars,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running MaXMB");
+        .build(tauri::generate_context!())
+        .expect("error while building MaXMB")
+        .run(|_, event| {
+            if let tauri::RunEvent::Exit = event {
+                display::on_exit();
+            }
+        });
 }

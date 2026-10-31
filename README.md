@@ -5,7 +5,7 @@
 <h1 align="center">MaXMB</h1>
 
 <p align="center"><b>The XMB, taken to the Max.</b><br>
-A PlayStation&nbsp;3 Style XrossMediaBar for Windows. Your games, music, photos, videos and the web, in one controller friendly system.</p>
+An XMB-inspired, controller-friendly system for Windows. Your games, music, photos, videos and the web, all in one place.</p>
 
 ---
 
@@ -16,7 +16,7 @@ MaXMB was made with the help of AI. The code was mainly written by an AI assista
 What I mainly worked on:
 
 - **The idea and the direction:** What the system is, what it does and how every part should behave.
-- **Faithfulness to the original XMB:** Reference captures of a real PS3's XMB menu in action and reverse engineering the look and behavior of the XMB's menus through testing, observation and hypothesis.
+- **Faithfulness to the original XMB:** Reference captures of the original XMB menu in action and reverse engineering its look and behavior through testing, observation and hypothesis.
 - **Design:** The MaXMB name and icon, the layouts, and every visual cohesion decision regarding menus and the overall look of the system.
 - **Testing:** Every build on Windows, with a controller and keyboard and mouse, plus the bug reports that shape each fix.
 - **Gathering what's credited below:** The tools, icon packs, avatars and add-ons the system uses or recommends.
@@ -56,12 +56,12 @@ What I mainly worked on:
 - **Friends Personalization:** Choose how many friends appear and design your own friend cards.
 
 **Themes**
-- Loads real PS3 themes (`.p3t`), animated backgrounds included, with control over which parts of a theme you use.
-- Save your own look as a Custom Theme (A `.zip` you can share with other MaXMB Users), save presets, or extract everything a PS3 theme contains.
+- Loads dynamic themes (`.p3t`), animated backgrounds included, with control over which parts of a theme you use.
+- Save your own look as a Custom Theme (A `.zip` you can share with other MaXMB Users), save presets, or extract theme contents.
 
 **Games**
 - Game folders with their own icon, animated preview, background and music, just like on the XMB.
-- Automatic game recognition from your folders, RPCS3 support (PS3 games start straight from the XMB), and art from SteamGridDB, TheGamesDB and RAWG using your own API keys.
+- Automatic game recognition from your folders, RPCS3 support for launching compatible games from the XMB, and art from SteamGridDB, TheGamesDB and RAWG using your own API keys.
 
 **Media players**
 - **Music Player:** With playlists, shuffle and repeat among other features.
@@ -75,6 +75,7 @@ What I mainly worked on:
 **Built to stay out of your way**
 - Everything lives in the system's own folders. Temporary files are the only ones that go to the Windows Temp folder.
 - Power saving options for slower computers, a HUD toggle and Screenshot support.
+- Optional TV display mode switches to the external display on launch and restores the PC-only display on exit; active Windows Full Screen Experience is exited on quit.
 
 ---
 
@@ -100,7 +101,7 @@ These are still to be added:
 ## Requirements
 
 - Windows 10 or 11.
-- **FFmpeg:** Needed for converting videos, video icons, songs and PS3 game previews and music.
+- **FFmpeg:** Needed for converting videos, video icons, songs and game previews and music.
 - **LibreWolf:** Needed for the Internet Browser, Internet Search and YouTube.
 
 See the MaXMB Manual for setup and controls.

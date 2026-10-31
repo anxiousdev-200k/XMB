@@ -270,6 +270,8 @@ impl Default for InputSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    #[serde(default)]
+    pub switch_to_tv: bool,
     pub library_paths: Vec<String>,
     pub music_paths: Vec<String>,
     pub photo_paths: Vec<String>,
@@ -318,6 +320,7 @@ fn str_or_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D:
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            switch_to_tv: false,
             library_paths: vec![],
             music_paths: vec![],
             photo_paths: vec![],
@@ -392,5 +395,16 @@ mod keep_extra_tests {
         let back = serde_json::to_value(&b).unwrap();
         assert_eq!(back["waveV2"], serde_json::json!(true));
         assert_eq!(back["volume"], serde_json::json!(40));
+    }
+
+    #[test]
+    fn switch_to_tv_defaults_off_and_round_trips() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!old.switch_to_tv);
+
+        let mut settings = old;
+        settings.switch_to_tv = true;
+        let back = serde_json::to_value(settings).unwrap();
+        assert_eq!(back["switchToTv"], serde_json::json!(true));
     }
 }

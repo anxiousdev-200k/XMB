@@ -1,12 +1,10 @@
-// Boot intro, measured frame by frame from a 1080p / 60 fps capture of the
-// console's start-up (PlayStation 3 Slim Startup 2007), counted from the
-// moment the boot sound starts:
+// Boot intro timing, counted from the moment the boot sound starts:
 //   0.0 - 1.7 s  black; only the wave, grey, lighting up (brighter than it
 //                ever is in the menu by 1.7 s)
-//   1.7 s        the PS mark starts to fade in; the background's colour
+//   1.7 s        the XMB mark starts to fade in; the background's colour
 //                starts to come up behind the wave
-//   2.0 - 2.6 s  "PS3" fades in from left to right (P, then S, then 3);
-//                "PlayStation 3" below it from 2.45 s
+//   2.0 - 2.6 s  "XMB" fades in from left to right; "Xross Media Bar" below
+//                it from 2.45 s
 //   2.6 - 4.1 s  the logo held while everything keeps getting brighter
 //   4.1 - 5.2 s  the logo fades out (the PS mark and the "3" first)
 //   5.7 s        the brightest moment: about 2.6 x the menu's own brightness
@@ -20,8 +18,8 @@
 import { setIntroBg } from "./wavegl.js";
 
 export const INTRO_MS = 7400;
-const MARK = "./assets/icons/system/ps_logo.svg";
-const WORD = "./assets/icons/system/ps3_logo.png";
+const MARK = "./assets/icons/system/xmb_mark.svg";
+const WORD = "./assets/icons/system/xmb_logo.svg";
 
 // [seconds, value] — straight lines between the points
 const BG = [[0, 0], [1.70, 0], [1.82, 0.05], [2.02, 0.15], [2.22, 0.26], [2.42, 0.38], [2.62, 0.48], [2.82, 0.61],
@@ -71,8 +69,8 @@ const SUB_A = [[0, 0], [2.45, 0], [2.49, 0.07], [2.56, 0.18], [2.59, 0.26], [2.6
   [3.96, 0.99], [4.0, 1], [4.2, 1], [4.23, 0.99], [4.26, 0.95], [4.29, 0.94], [4.33, 0.87], [4.36, 0.79],
   [4.39, 0.77], [4.43, 0.66], [4.49, 0.54], [4.53, 0.46], [4.56, 0.41], [4.59, 0.38], [4.63, 0.25], [4.66, 0.2],
   [4.69, 0.16], [4.73, 0.14], [4.76, 0.08], [4.81, 0.05], [4.91, 0.03], [5.16, 0]];
-// where the P, the S and the 3 sit across the "PS3" picture (its middles, %)
-const XP = 17.2, XS = 43.8, X3 = 81.2;
+// Approximate the three letter centers in the XMB wordmark, as percentages.
+const X1POS = 30, X2POS = 64, X3POS = 100;
 
 function at(tab, s) {
   if (s <= tab[0][0]) return tab[0][1];
@@ -87,8 +85,8 @@ const BG_LAYERS = ["p3tbg", "wallpaper", "bgtint", "overlay"];
 const WAVE_LAYERS = ["wavegl", "wave"];
 
 // onSound(seconds): the boot sound has started (its length); onSkip(): skipped
-// icon / title: your own pictures in place of the PlayStation mark and the
-// "PS3" title (System Settings > Intro Icon / Intro Title)
+// icon / title: your own pictures in place of the XMB mark and title
+// (System Settings > Intro Icon / Intro Title)
 export function playIntro(audio, { enabled = true, bootSound = "coldboot", onSound = null, onSkip = null, icon = null, title = null } = {}) {
   // the picture and the boot sound start together: wait (briefly) for the
   // sound, and for the logo's pictures to be decoded (on a first start they
@@ -153,7 +151,7 @@ export function playIntro(audio, { enabled = true, bootSound = "coldboot", onSou
       if (title) $word.style.opacity = at(P_A, s).toFixed(3);
       else {
         const a = (v) => `rgba(0,0,0,${v.toFixed(3)})`, p = at(P_A, s), q = at(S_A, s), r = at(T_A, s);
-        const m = `linear-gradient(90deg, ${a(p)} 0%, ${a(p)} ${XP}%, ${a(q)} ${XS}%, ${a(r)} ${X3}%, ${a(r)} 100%)`;
+        const m = `linear-gradient(90deg, ${a(p)} 0%, ${a(p)} ${X1POS}%, ${a(q)} ${X2POS}%, ${a(r)} ${X3POS}%, ${a(r)} 100%)`;
         $word.style.webkitMaskImage = m; $word.style.maskImage = m;
         $sub.style.opacity = at(SUB_A, s).toFixed(3);
       }

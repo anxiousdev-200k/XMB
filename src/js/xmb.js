@@ -50,7 +50,7 @@ const DWELL_MS = 1200;
 const IDLE_FADE_COLS = ["photo", "music", "video", "game", "network", "psn"];
 // fixed subsections at the top of the Photo / Video columns (before the media)
 const FIXED_ITEMS = { photo: 3, video: 4 };
-const HOME_DESC = "Play games and meet friends in PlayStation\u00aeHome,\nthe definitive social gaming network only on PlayStation\u00ae3 system.";
+const HOME_DESC = "Play games and meet friends in PlayStation\u00aeHome,\nthe definitive social gaming network on XMB.";
 // a game folder named any way as "PlayStation Home" (PlayStation®Home,
 // playstation_home, PS3 Home…) can be launched from PSN > PlayStation®Home
 // a game's name as listed: games with the same title are numbered, "Title (2)"
@@ -67,7 +67,7 @@ const CONSOLE_TABLE = [
   ["PC", "PC", "tex_vc_pc.png"],
   ["PS1", "PlayStation\u00ae", "item_tex_ps1format.png"],
   ["PS2", "PlayStation\u00ae2", "item_tex_ps2format.png"],
-  ["PS3", "PlayStation\u00ae3", "item_tex_ps3format.png"],
+  ["PS3", "XMB", "tex_vc_none.png"],
   ["PS4", "PlayStation\u00ae4", "item_tex_ps4format.png"],
   ["PS5", "PlayStation\u00ae5", "item_tex_ps5format.png"],
   ["PSP", "PSP\u2122", "item_tex_pspformat.png"],
@@ -100,10 +100,18 @@ const CONSOLE_TABLE = [
 ];
 const CONSOLES = CONSOLE_TABLE.map((c) => c[0]);
 const FORMAT_NAMES = Object.fromEntries(CONSOLE_TABLE.map((c) => [c[0], c[1]]));
+const formatName = (consoleName) => {
+  const name = String(consoleName || "").trim();
+  if (name.toLowerCase() === "ps3") return "XMB";
+  return FORMAT_NAMES[name] || name || "XMB";
+};
 // the console badge shown on the right of the selected game (PS3-style); a
 // console that isn't in the list gets the blank badge with its name written on
 function consoleBadge(c) {
   const key = String(c || "PS3");
+  if (key.toLowerCase() === "ps3") {
+    return `<span class="game-fmt game-fmt-txt" style="background-image:url('./assets/icons/consoles/tex_vc_none.png')"><span>XMB</span></span>`;
+  }
   const row = CONSOLE_TABLE.find((r) => r[0].toLowerCase() === key.toLowerCase());
   return row
     ? `<img class="game-fmt" src="./assets/icons/consoles/${row[2]}" alt="">`
@@ -111,7 +119,7 @@ function consoleBadge(c) {
       key.length <= 6 ? 1.35 : key.length <= 9 ? 1.1 : key.length <= 13 ? 0.85 : 0.7}vh">${esc(key)}</span></span>`;
 }
 // the disc shown for a game set as "Disc" (PS1 / PS2 / PS3, otherwise the default)
-const discIcon = (c) => `./assets/icons/discs/${["PS1", "PS2", "PS3"].includes(c) ? c : "default"}.png`;
+const discIcon = (c) => `./assets/icons/discs/${["PS1", "PS2"].includes(c) ? c : "default"}.png`;
 const DISC_HOLD_MS = 2000;   // the disc game keeps its disc this long when selected
 // (names, Online IDs and messages: up to 255 characters, any character)
 const MSG_LIMIT = 255;
@@ -506,7 +514,7 @@ export class Xmb {
       case "photo": return { id: "photo", label: "Photo", icon: "tex_photo.png", items: [
         this._mediaServersItem(),
         { kind: "action", act: "photo_gallery", title: "Photo Gallery", icon: { sys: "photo_gallery.png" }, bg: "cinfo-bg-photogallery.jpg",
-          sub: "Create a space to enjoy and enhance your photos.\nTurn the photos on your PS3™ system into great albums in minutes.\nYou can sort your photos by themes, add music to enhance a slideshow or add custom frames to your photos. The more photos you add, the more fun you can have – the possibilities are endless!" },
+          sub: "Create a space to enjoy and enhance your photos.\nTurn your photos into great albums in minutes.\nYou can sort your photos by themes, add music to enhance a slideshow or add custom frames to your photos. The more photos you add, the more fun you can have – the possibilities are endless!" },
         { kind: "drill", title: "Playlists", icon: { sys: "icon_playlist.png" }, children: await this._photoPlaylistItems() },
         ...await this._mediaSectionItems("photo"),
       ] };
@@ -589,7 +597,7 @@ export class Xmb {
     this._render(); this._onSelect();
   }
   _settingsItems() {
-    // Full Settings column in the standard PS3 order. Items without a `drills`
+    // Full Settings column in the standard XMB order. Items without a `drills`
     // entry below are visual-only placeholders (no functionality yet).
     const names = [
       ["System Update", "icon_update.png"],
@@ -612,7 +620,7 @@ export class Xmb {
     // Icons shown INSIDE any Settings subsection are the generic Setting icon.
     const SI = { sys: "icon_setting_item.png" };
     const themeItems = [
-      { kind: "drill", title: "PS3 Themes", icon: SI, childrenFn: this._p3tThemeItems },
+      { kind: "drill", title: "XMB Themes", icon: SI, childrenFn: this._p3tThemeItems },
       { kind: "drill", title: "Custom Themes", icon: SI, childrenFn: this._customThemeItems },
       { kind: "drill", title: "Icon Sets", icon: SI, childrenFn: this._iconThemeItems },
       { kind: "drill", title: "Sound Effect Sets", icon: SI, childrenFn: this._soundThemeItems },
@@ -740,6 +748,8 @@ export class Xmb {
       "System Settings": [
         { kind: "setting", ctl: "autostart", title: "Start at Windows Startup", icon: SI },
         { kind: "setting", ctl: "boot", title: "Boot Intro", icon: SI },
+        { kind: "setting", ctl: "tvdisplay", title: "Switch to TV", icon: SI,
+          sub: "On: Use the second display only when XMB starts, then return to the PC display when XMB exits. If Windows Full Screen Experience is active, exit it on quit." },
         { kind: "drill", title: "Media Folders", icon: SI,
           sub: "Choose the folders from where the system recognizes media files.",
           childrenFn: this._mediaFolderItems },
@@ -761,7 +771,7 @@ export class Xmb {
       "Video Settings": "Adjusts settings for video.",
       "Music Settings": "Adjusts settings for music.",
       "Chat Settings": "Adjusts settings for chat.",
-      "System Settings": "Adjusts settings for this PS3™ system.",
+      "System Settings": "Adjusts settings for XMB.",
       "Theme Settings": "Adjusts settings related to the appearance of the XMB™ screen.",
       "Date and Time Settings": "Adjusts date and time settings.",
       "Power Save Settings": "Adjusts settings to reduce power usage by this system.",
@@ -998,7 +1008,7 @@ export class Xmb {
     const byCreatedUp = (a, b) => cmpText(String(a.game.created || ""), String(b.game.created || "")) || byTitle(a, b);
     const played = this.user?.gamePlayed || {};
     const byPlayed = (a, b) => (played[b.game.folder] || 0) - (played[a.game.folder] || 0) || byCreated(a, b);
-    const fmtName = (e) => FORMAT_NAMES[e.game.console] || e.game.console || "PS3";
+    const fmtName = (e) => formatName(e.game.console);
     const byFormat = (a, b) => cmpBase(fmtName(a), fmtName(b)) || byCreated(a, b);
     const order = { created_asc: byCreatedUp, recent: byPlayed, format: byFormat }[this._gameSortId()] || byCreated;
     // a game with no icon that isn't inside a folder gets the default game icon
@@ -1006,7 +1016,7 @@ export class Xmb {
     if (mode !== "format" && mode !== "album") return [...entries].sort(order).map(withDefault);
     const groups = new Map();
     for (const e of entries) {
-      const k = mode === "format" ? (FORMAT_NAMES[e.game.console] || e.game.console || "PS3") : (e.game.album || "Unknown");
+      const k = mode === "format" ? formatName(e.game.console) : (e.game.album || "Unknown");
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(e);
     }
@@ -1362,10 +1372,10 @@ export class Xmb {
   }
 
   // Theme Settings > Icons > Intro Icon / Intro Title: your own picture in
-  // place of the PlayStation mark / the "PlayStation 3" title of the Boot Intro
+  // place of the XMB mark / title of the Boot Intro
   _introArtSub(which) {
-    return which === "icon" ? "Select a photo to replace the Playstation icon in the intro."
-      : "Select a photo to replace the \"Playstation 3\" title in the intro.";
+    return which === "icon" ? "Select a photo to replace the XMB icon in the intro."
+      : "Select a photo to replace the XMB title in the intro.";
   }
   async _introArtMenu(which) {
     const key = which === "icon" ? "introIcon" : "introTitle";
@@ -1496,6 +1506,7 @@ export class Xmb {
       case "optionsBand": return this._gameBandOn(g) ? "On" : "Off";
       case "hideTitle": return this._gameHideTitle(g) ? "On" : "Off";
       case "created": case "starts": return g[p.key] ? this._fmtCreated(g[p.key]) : "-";
+      case "console": return formatName(g.console);
       default: return String(g[p.key] || "-");
     }
   }
@@ -2005,7 +2016,7 @@ Are you sure you want to continue?`,
     return [
       authItem,
       { kind: "ph", title: "What's New", icon: { sys: "whatsnew.png" }, bg: "cinfo-bg-whatsnew.jpg",
-        sub: "Welcome to PlayStation\u00ae3.\nThe \"What's New\" screen is where to find all the latest PlayStation\u00ae news, updates, plus easy access to the games you've most recently played.\nTo access the \"What's New\" screen, connect to PSN* \u2013 it's free to join and it's your gateway to a world of entertainment, so sign up today!\n\n* Broadband Internet connection required." },
+        sub: "Welcome to XMB.\nThe \"What's New\" screen is where to find all the latest PlayStation\u00ae news, updates, plus easy access to the games you've most recently played.\nTo access the \"What's New\" screen, connect to PSN* \u2013 it's free to join and it's your gateway to a world of entertainment, so sign up today!\n\n* Broadband Internet connection required." },
       // Trophy Collection: description only when signed in to PSN.
       { kind: "ph", title: "Trophy Collection", icon: { sys: "icon_trophy.png" },
         sub: signedIn ? "Online Mode\nView trophy information saved on the server." : "" },
@@ -2025,7 +2036,7 @@ Are you sure you want to continue?`,
   _mediaServersItem() { return { kind: "ph", title: "Search for Media Servers", sub: "", icon: { sys: "icon_mediaserver_search.png" } }; }
   _storeItem(bg) {
     return { kind: "ph", title: "PlayStation\u00aeStore", icon: { sys: "store.png" }, bg,
-      sub: "FREE* to access, PlayStation\u00aeStore is the only place to download new and exclusive PS3\u2122 games, FREE playable demos, add-on packs, and high-definition videos.\n\nGet more for your PS3\u2122 and visit PlayStation\u00aeStore today.\n\n* Broadband Internet connection required." };
+      sub: "FREE* to access, PlayStation\u00aeStore is the only place to download new and exclusive games, FREE playable demos, add-on packs, and high-definition videos.\n\nVisit PlayStation\u00aeStore today.\n\n* Broadband Internet connection required." };
   }
 
 
@@ -2149,7 +2160,7 @@ Are you sure you want to continue?`,
     return loose.length ? [...drills, ...loose.sort(byTitle)] : drills;
   }
 
-  _formatName(c) { return FORMAT_NAMES[c] || c || "PS3"; }
+  _formatName(c) { return formatName(c); }
   _mediaMode(kind) { return (this.mediaMode && this.mediaMode[kind]) || "all"; }
 
   // Section body (songs/photos/videos) for the current sort mode.
@@ -3722,7 +3733,9 @@ Are you sure you want to continue?`,
   }
   _ctlValue(ctl) {
     if (ctl && ctl.startsWith("gm:")) return this._gmValue(ctl);
-    if (ctl && ctl.startsWith("gmf:")) return this._gmfValue(ctl);
+    if (ctl && ctl.startsWith("gmf:")) {
+      return formatName(this._gmfValue(ctl));
+    }
     if (ctl && ctl.startsWith("secft:")) return this._secftValue(ctl);
     if (ctl && ctl.startsWith("secfx:")) return this._secfxValue(ctl);
     if (ctl && ctl.startsWith("tho:")) return this._thoGet(ctl) ? "On" : "Off";
@@ -3769,6 +3782,7 @@ Are you sure you want to continue?`,
       case "friendmax": return String(this._friendCfg().max);
       case "music": return u?.musicEnabled === false ? "Off" : "On";
       case "fullscreen": return s?.behavior?.fullscreen ? "On" : "Off";
+      case "tvdisplay": return s?.switchToTv ? "On" : "Off";
       case "autostart": return s?.behavior?.autostart ? "On" : "Off";
       case "boot": return s?.behavior?.bootAnimation ? "On" : "Off";
       case "startsound": return s?.behavior?.startupSound === false ? "Off" : "On";
@@ -3832,6 +3846,7 @@ Are you sure you want to continue?`,
       case "music": u.musicEnabled = u.musicEnabled === false; this.audio.musicEnabled = u.musicEnabled; this._applyBgMusic(); this._persistUser(); break;
       case "fullscreen": s.behavior.fullscreen = !s.behavior.fullscreen; call("set_fullscreen", { enable: s.behavior.fullscreen }); this.cbs.onFullscreen && this.cbs.onFullscreen(s.behavior.fullscreen); this._persistSettings();
         setTimeout(() => this._applyResolution(), 350); break;
+      case "tvdisplay": s.switchToTv = !s.switchToTv; this._persistSettings(); break;
       case "resolution": this._cycleResolution(1); return;
       case "iconstyle": this._cycleIconStyle(1); return;
       case "lowpower": s.behavior.lowPowerMode = !s.behavior.lowPowerMode; this._persistSettings();
@@ -4026,7 +4041,7 @@ Are you sure you want to continue?`,
   _consoleChoices(title, cur, set) {
     const names = [...CONSOLES];
     if (cur && cur !== "Mixed" && cur !== "-" && !names.includes(cur)) names.push(cur);   // a typed-in one stays a choice
-    const items = names.map((c) => ({ label: c, apply: () => set(c) }));
+    const items = names.map((c) => ({ label: c === "PS3" ? "XMB" : c, apply: () => set(c) }));
     items.push({ label: "Custom Console\u2026", always: true, apply: () => this._askConsole(title, cur, set) });
     return { items, cur: names.indexOf(cur) };
   }
@@ -4385,8 +4400,8 @@ Are you sure you want to continue?`,
     }));
     if (kind === "custom") out.unshift({ kind: "action", act: "theme_custom_create", title: "Create Custom Theme", icon: SI,
       sub: "Save your current Theme settings as a full custom theme." });
-    if (!list.length) out.push({ kind: "ph", title: { p3t: "No PS3 Themes", icon: "No Icon Sets", custom: "No Custom Themes", sound: "No Sound Effect Sets" }[kind], icon: SI,
-      sub: { p3t: "Put PS3 theme files (.p3t) in the content\\Themes folder.",
+    if (!list.length) out.push({ kind: "ph", title: { p3t: "No XMB Themes", icon: "No Icon Sets", custom: "No Custom Themes", sound: "No Sound Effect Sets" }[kind], icon: SI,
+      sub: { p3t: "Put theme files (.p3t) in the content\\Themes folder.",
         icon: "Put a folder of icons in the Icon folder, named like the system's icons (icon_game.png...), with a .json file giving the theme's name.",
         custom: "Put custom themes (.zip) in the content\\Themes folder.",
         sound: "Put a folder of sounds in the Sound Effects folder, named like the system's sounds (cursor, enter, back, coldboot...), with a .json file giving the pack's name." }[kind] });

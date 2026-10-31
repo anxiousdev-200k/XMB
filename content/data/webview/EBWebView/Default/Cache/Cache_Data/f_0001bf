@@ -601,22 +601,19 @@ body.browser-open:not(.clock-loading) #infobox *, body.browser-open #infobox .ib
 .br-center.on { opacity: 1; }
 .br-center .loading-spin { display: block; }
 
-/* ---------- boot intro: fade from black, then PS3 wordmark (Screenshot_19) ---------- */
+/* ---------- boot intro: fade from black, then the XMB wordmark ---------- */
 .intro { position: fixed; inset: 0; z-index: 90; pointer-events: none; transition: opacity 0.7s ease; }
 .intro.gone { opacity: 0; }
 /* black layer that fades out to reveal the live background (waves + dots) */
 .intro-black { position: absolute; inset: 0; background: #000; opacity: 1; transition: opacity 1.3s ease; }
 .intro-black.fade { opacity: 0; }
-/* the PlayStation mark, "PS3" and "PlayStation 3", placed as on the console
-   (measured on a 1080p capture: the mark at x 1143-1262 / y 490-581, "PS3" at
-   x 1365-1764 / y 488-572, "PlayStation 3" at x 1483-1624 / y 609-633). Sizes
-   in screen heights, across from the middle of the screen, so the logo keeps
-   its shape on any screen. Each part's opacity is set frame by frame (intro.js). */
+/* XMB mark and wordmark placement measured in screen heights, across from the
+   middle of the screen, so the logo keeps its shape on any screen. Each part's
+   opacity is set frame by frame (intro.js). */
 .intro-logo { position: absolute; inset: 0; }
 .intro-logo > img { position: absolute; display: block; opacity: 0; }
 .il-mark { left: calc(50vw + 16.94vh); top: 45.37vh; height: 8.426vh; width: auto; filter: brightness(0.92); }
-/* (ps3_logo.png: "PS3" on its top 64 rows, "PlayStation 3" on rows 89-108 of 110;
-   the subtitle is a little smaller on the console, so it's shown on its own) */
+/* The subtitle is shown separately to preserve its smaller visual scale. */
 .il-word { left: calc(50vw + 34.94vh); top: 45.06vh; height: 13.37vh; width: auto; clip-path: inset(0 0 30% 0);
   -webkit-mask-image: linear-gradient(#0000, #0000); mask-image: linear-gradient(#0000, #0000); }
 .intro-logo > .il-sub { left: calc(50vw + 37.16vh); top: 47.02vh; height: 11.58vh; width: auto; clip-path: inset(72% 0 0 0); }

@@ -89,6 +89,7 @@ const mock = {
   users: { users: [], active: null },
   psn: { accounts: [] },
   settings: {
+    switchToTv: false,
     libraryPaths: [], musicPaths: [], photoPaths: [], videoPaths: [],
     mediaMode: "app", mediaFolders: {}, gameMode: "app", gameSources: [],
     behavior: { fullscreen: true, autostart: false, bootAnimation: true, bootSound: "coldboot" },
@@ -170,7 +171,7 @@ export async function call(cmd, args = {}) {
       ? [...(MOCK_MEDIA.photo || []), ...(MOCK_MEDIA.video || [])] : (MOCK_MEDIA[args.kind] || []));
     case "get_settings": return structuredClone(mock.settings);
     case "save_settings": mock.settings = structuredClone(args.settings); return null;
-    case "set_autostart": case "set_fullscreen": return null;
+    case "set_autostart": case "set_fullscreen": case "switch_to_tv": return null;
     case "list_users": return structuredClone(mock.users);
     case "create_user": {
       const u = { id: nid("u"), name: args.name, avatar: args.avatar, psnAccountId: null,
