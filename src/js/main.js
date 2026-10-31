@@ -107,11 +107,13 @@ const appIconsReady = (async () => {
   try { urls = await (await fetch("./assets/icons/index.json")).json(); } catch (e) {}
   await preloadAppIcons(urls);
 })();
+appIconsReady.catch((e) => console.error("Preloading app icons", e));
 
 // ------------------------------------------------------------------- input
 // (nothing reaches the menu while it waits behind the black screen / the intro)
 function dispatch(a) {
-  if (Input.picking || document.body.classList.contains("intro-hold") || document.body.classList.contains("hud-off")) return;
+  if (Input.picking || document.body.classList.contains("intro-hold") || document.body.classList.contains("hud-off")
+    || document.body.classList.contains("in-game")) return;
   xmb.onInput(a);
 }
 function toggleHud() {
@@ -520,40 +522,44 @@ async function boot() {
   let loggedOut = false;
   try { loggedOut = sessionStorage.getItem("xmbLogOut") === "1"; sessionStorage.removeItem("xmbLogOut"); } catch (e) {}
   const introOn = !loggedOut && settings.behavior?.bootAnimation !== false;
-  const t0 = performance.now();
-  // Console Startup Sound (System Settings, On by default): the screen stays
-  // black with the sound playing while the first menu is made (at least 3 s);
-  // then it drops to the Buffering Sound Volume as the intro starts, and at
-  // the end of the intro's sound it fades out (or, with the Buffering Sound
-  // on, stays at that volume and carries on as that loop)
-  let su = null;
+  // Console Startup Sound (System Settings, On by default) loads alongside
+  // the first menu instead of adding a fixed sound-only wait.
+  let su = null, startupReady = true, introStarted = false, introFinished = false, startupTimer = 0;
+  const fadeStartupSound = (handle) => {
+    const bs = settings.behavior?.bootSound || "coldboot";
+    audio.ready(bs).then(() => {
+      const b = (audio.themeBuffers || {})[bs] || audio.buffers[bs];
+      handle.fadeOutIn(b ? b.duration : 10, 3);
+    }).catch((e) => console.error("Loading startup sound", e));
+  };
   audio._bufOn = settings.behavior?.bufferingSound === true;
   audio.bufVol = Math.max(0, Math.min(1, (settings.behavior?.bufferingVolume ?? 15) / 100));   // (decides how the startup sound ends)
-  // (with the intro off, the startup sound still plays: the same black screen
-  // and the same drop, and the menu comes in the moment the intro would)
   if (!loggedOut && settings.behavior?.startupSound !== false) {
-    su = await Promise.race([audio.startupSound(0.85), new Promise((r) => setTimeout(() => r(null), 2500))]);
-    // (still loading after 2.5 s, as on a first start: it's left out this time;
-    // started late it would play on at full volume with nothing to end it)
-    if (!su) audio.cancelStartup();
+    startupReady = false;
+    audio.startupSound(0.85).then((handle) => {
+      su = handle; startupReady = true; clearTimeout(startupTimer);
+      if (introStarted && su) {
+        su.half();
+        if (introFinished && !introOn) fadeStartupSound(su);
+      }
+    }, (e) => {
+      startupReady = true; clearTimeout(startupTimer);
+      console.error("Starting console startup sound", e);
+    });
+    startupTimer = setTimeout(() => {
+      if (!startupReady) { startupReady = true; audio.cancelStartup(); }
+    }, 2500);
   }
-  // the first menu (the user selection, or Automatic Login's What's New) is
-  // made now, hidden behind the black screen; no sound or music meanwhile
+  // Build the first menu while icons and audio load. The configured intro
+  // still plays over the completed menu.
   document.body.classList.add("intro-hold");
   audio.hold = true;
   try {
-    await Promise.race([appIconsReady, new Promise((r) => setTimeout(r, 4000))]);
     await xmb.start(manifest, { noAutoLogin: loggedOut });
   } catch (e) { console.error(e); }
-  if (su) {
-    // (at least 3 s of the sound alone; this part can't be skipped)
-    const left = 2500 - su.elapsed() * 1000;   // (the drop at 2.5 s, the intro at 3 s)
-    if (left > 0) await new Promise((res) => setTimeout(res, left));
-    // down to the Buffering Sound Volume (15 % unless changed), reached 0.1 s before the intro's sound starts
-    su.half();
-    await new Promise((r) => setTimeout(r, 500));
-  }
   endBootClock();
+  introStarted = true;
+  if (su) su.half();
   await playIntro(audio, {
     enabled: introOn,
     bootSound: settings.behavior?.bootSound || "coldboot",
@@ -564,17 +570,13 @@ async function boot() {
     // Buffering Sound on, and carries on as its loop)
     onSkip: () => su && su.fadeOutIn(0.6, 0.6),
   });
+  introFinished = true;
   // intro off: the startup sound ends just as it would have with the intro
   // (at the end of where the intro's sound would be, fading over 3 s; or on at
   // the Buffering Sound's volume as its loop)
-  if (su && !introOn) {
-    const bs = settings.behavior?.bootSound || "coldboot";
-    await Promise.race([audio.ready(bs), new Promise((r) => setTimeout(r, 1500))]).catch(() => {});
-    const b = (audio.themeBuffers || {})[bs] || audio.buffers[bs];
-    su.fadeOutIn(b ? b.duration : 10, 3);
-  }
+  if (su && !introOn) fadeStartupSound(su);
   // (skipped before its sound: the startup sound ends now)
-  if (su) su.fadeOutIn(0.8, 0.8);
+  if (su && introOn) su.fadeOutIn(0.8, 0.8);
   document.body.classList.remove("booting", "intro-hold");
   audio.release();
   // (the System can't save in its own folder: said once, at the start)

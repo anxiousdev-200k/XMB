@@ -685,6 +685,29 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn shutdown_system(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("shutdown.exe")
+            .args(["/s", "/t", "0"])
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .map_err(|e| format!("Could not start Windows shutdown: {e}"))?;
+        cursorlock::release_now();
+        browser::on_app_exit(&app);
+        maybe_cleanup_temp(&app);
+        app.exit(0);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("System shutdown is only supported on Windows.".into())
+    }
+}
+
 // ---------------------------- icon shading cache -----------------------------
 // The glossy icon images are made in the webview; they're saved here so the
 // next start (or a refresh) can show them right away. Kept in the temporary
@@ -903,6 +926,7 @@ pub fn run() {
             audio::decode_audio,
             app_info,
             quit_app,
+            shutdown_system,
             quitkey::set_quit_key,
             clear_cache,
             browser::browser_status,

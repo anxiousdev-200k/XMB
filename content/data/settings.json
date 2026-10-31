@@ -1,0 +1,71 @@
+{
+  "libraryPaths": [
+    "C:/Users/Deki/Documents/Codes/XMB\\content\\Games"
+  ],
+  "musicPaths": [
+    "C:/Users/Deki/Documents/Codes/XMB\\content\\Music"
+  ],
+  "photoPaths": [
+    "C:/Users/Deki/Documents/Codes/XMB\\content\\Photos"
+  ],
+  "videoPaths": [
+    "C:/Users/Deki/Documents/Codes/XMB\\content\\Videos"
+  ],
+  "backgroundPaths": [],
+  "subtitlePaths": [
+    "C:/Users/Deki/Documents/Codes/XMB\\content\\Subtitles"
+  ],
+  "behavior": {
+    "fullscreen": true,
+    "autostart": false,
+    "bootAnimation": false,
+    "bootSound": "coldboot",
+    "volume": 100,
+    "musicVolume": 100,
+    "sfxVolume": 100,
+    "brightness": 100,
+    "timeFormat": "24",
+    "dateFormat": "DD/MM/YYYY",
+    "playAudioBackground": true,
+    "deleteTempFiles": true,
+    "keepPreloadedSongs": false,
+    "keepPreloadedVideos": false,
+    "cacheInAppDir": false,
+    "vsync": true,
+    "motionSparkles": true,
+    "lowPowerMode": true,
+    "virtualKeyboard": true,
+    "motionStrength": 5,
+    "resolution": "native",
+    "bootSoundFile": "C:/Users/Deki/Documents/Codes/XMB\\content\\Sound Effects\\Original Sounds\\coldboot.ogg",
+    "lowPowerOffOnce": true,
+    "startupSound": false
+  },
+  "input": {
+    "controller": true,
+    "keyboard": true,
+    "mouse": true,
+    "deadzone": 0.5,
+    "keybinds": null
+  },
+  "mediaMode": "app",
+  "mediaFolders": {
+    "music": [],
+    "videos": [],
+    "photos": [
+      "C:\\Users\\Deki\\Pictures\\Wallpapers"
+    ],
+    "subtitles": []
+  },
+  "gameMode": "app",
+  "gameSources": [
+    "E:\\Games 1\\Assassins Creed Black Flag Resynced"
+  ],
+  "scrape": {
+    "auto": null,
+    "sgdbKey": "",
+    "tgdbKey": "",
+    "rawgKey": ""
+  },
+  "sections": null
+}

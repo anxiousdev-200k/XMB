@@ -374,7 +374,7 @@ export class Xmb {
     // never the selected item's backdrop (Sign Up, Photo Gallery, a game's
     // picture): the wave comes back while a menu is open
     // (nor during the boot intro: the menu behind it is hidden, so an item's
-    // backdrop chosen meanwhile — What's New with Automatic Login — would
+    // backdrop chosen meanwhile — the first selected game after login — would
     // leave only black; the user's background shows through the intro)
     const covered = () => { const c = document.body.classList; return c.contains("menu-open") || c.contains("intro-hold") || c.contains("intro-run") || c.contains("booting"); };
     this._syncWaveHidden = () => {
@@ -386,7 +386,7 @@ export class Xmb {
     };
     // (uncovered: the wave stays until the menu, with the item's backdrop in
     // it, has faded in (0.5 s), or the screen goes dark for a moment, as at
-    // the end of the boot intro with Automatic Login landing on What's New)
+    // the end of the boot intro with Automatic Login landing on Game)
     new MutationObserver(() => {
       const open = covered();
       if (open === this._menuOpenSeen) return;
@@ -443,11 +443,11 @@ export class Xmb {
     this.manifest = manifest;
     this.locked = true; this.user = null;
     await this._buildColumns();
-    // Automatic Login: that user is logged in at once, on What's New
+    // Automatic Login: that user is logged in at once, on Game
     const auto = noAutoLogin ? null : (this.usersFile?.users || []).find((u) => u.autoLogin);
     if (auto) {
       this.show();
-      await this._signIn(auto, { startAt: "whatsnew" });
+      await this._signIn(auto);
       this._applyPerformance();
       setTimeout(() => this._applyResolution(), 400);
       return;
@@ -470,11 +470,11 @@ export class Xmb {
   // after a theme change), instead of reading it again
   async _buildColumns({ reuseGames = false } = {}) {
     this.mediaMode ||= { music: "all", photo: "all", video: "all" };
-    const games = reuseGames && this._lastGames ? this._lastGames : await call("scan_library");
-    this._lastGames = games;
     this._loadDetected();
     const users = await this._buildColumn("users");
     if (this.locked) { this.columns = [users]; return; }
+    const games = reuseGames && this._lastGames ? this._lastGames : await call("scan_library");
+    this._lastGames = games;
     this.psnAccounts = await call("list_psn_accounts");
     // the libraries' fingerprints as their lists are read now (see _liveRefresh)
     await this._takeMediaFingerprints(["photo", "video", "music"]);
@@ -493,10 +493,11 @@ export class Xmb {
         const uf = await call("list_users");
         this.usersFile = uf;
         // The column is "Log In" until a user is chosen/created this session, then
-        // "Users" for the rest of the session. Create New User sits directly under
-        // Turn Off System, with the profiles below it.
+        // "Users" for the rest of the session. The power and quit actions stay
+        // at the top, with account management below them.
         return { id: "users", label: this._loggedInOnce ? "Users" : "Log In", icon: "tex_user.png", items: [
           { kind: "action", act: "turnoff", title: "Turn Off System", sub: "", icon: { sys: "icon_poweroff.png" } },
+          { kind: "action", act: "quit", title: "Quit to Desktop", sub: "", icon: { sys: "icon_poweroff.png" } },
           { kind: "newuser", title: "Create New User", sub: "", icon: { sys: "icon_newuser.png" } },
           ...uf.users.map((u) => ({ kind: "user", title: u.name, sub: "", icon: { avatar: u.avatar }, user: u })),
         ] };
@@ -932,8 +933,7 @@ export class Xmb {
     return out;
   }
 
-  // Game column: the PlayStation Store, then the games alphabetically, top to
-  // bottom (natural order: "Game 2" before "Game 10").
+  // Game column: saved data utility, then games in the selected sort order.
   _gameItems(games) {
     this._allGames = games || [];
     // a "PlayStation Home" game always starts from PSN > PlayStation®Home
@@ -941,18 +941,44 @@ export class Xmb {
     const list = [...(games || [])].filter((g) => g !== this._homeGame);
     const uname = this.user?.name || "User 1";
     const fixed = [
-      { kind: "ph", title: "PS Vita System Application Utility", sub: uname, userSub: true, icon: { sys: "icon_gamedata.png" } },
-      { kind: "ph", title: "Game Data Utility", sub: "", icon: { sys: "icon_gamedata.png" } },
-      { kind: "ph", title: "Memory Card Utility", sub: "", icon: { sys: "icon_vmc.png" } },
-      { kind: "ph", title: "Saved Data Utility (minis/PSP\u2122)", sub: uname, userSub: true, icon: { sys: "icon_savedata_minis.png" } },
-      { kind: "ph", title: "Saved Data Utility (PS3\u2122)", sub: uname, userSub: true, icon: { sys: "icon_savedata.png" } },
-      this._storeItem("cinfo-bg-storegame.jpg"),
+      { kind: "ph", title: "Saved Data Utility", sub: uname, userSub: true, icon: { sys: "icon_savedata.png" } },
     ];
     this._gameFixedCount = fixed.length;
     // the disc (only one) sits above every other game, without a date line
     const disc = list.find((g) => g.isDisc);
     const entries = list.filter((g) => g !== disc).map((g) => this._gameEntry(g));
     return [...fixed, ...(disc ? [this._gameEntry(disc)] : []), ...this._groupGames(entries)];
+  }
+  _gameFocusLevels(items, folder = null) {
+    const find = (list) => {
+      for (let i = 0; i < list.length; i++) {
+        const it = list[i];
+        if (it.kind === "game" && (!folder || it.game?.folder === folder)) return [{ items: list, sel: i }];
+        if (it.kind !== "drill" || !Array.isArray(it.children)) continue;
+        const nested = find(it.children);
+        if (nested) return [
+          { items: list, sel: i },
+          { ...nested[0], head: { icon: it.icon, label: it.title }, inFolder: true },
+          ...nested.slice(1),
+        ];
+      }
+      return null;
+    };
+    return find(items) || [{ items, sel: 0 }];
+  }
+  _markGamePlayed(game) {
+    if (!this.user || !game.folder) return;
+    (this.user.gamePlayed ||= {})[game.folder] = Date.now();
+    this._persistUser();
+    const col = this.columns?.find((c) => c.id === "game");
+    if (!col || !this._lastGames) return;
+    col.items = this._gameItems(this._lastGames);
+    const levels = this._gameFocusLevels(col.items, game.folder);
+    const selected = levels[levels.length - 1];
+    if (selected?.items[selected.sel]?.game?.folder !== game.folder) return;
+    this._colSel ||= {};
+    this._colSel.game = levels[0].sel;
+    if (this.columns[this.selCat] === col) this.levels = levels;
   }
   // one game row: its name and (not for the disc) the "Created" date + time
   _gameEntry(g) {
@@ -966,8 +992,8 @@ export class Xmb {
   _groupGames(entries) {
     const byTitle = (a, b) => cmpNatural(String(a.title), String(b.title));
     const mode = this._mediaMode("game");
-    // Sort By (the game options): Creation Date ▼ (newest first, the default),
-    // Creation Date ▲, Recently Played (last started first), Format (console)
+    // Sort By defaults to Recently Played; creation-date and format ordering
+    // remain available in the game's options.
     const byCreated = (a, b) => cmpText(String(b.game.created || ""), String(a.game.created || "")) || byTitle(a, b);
     const byCreatedUp = (a, b) => cmpText(String(a.game.created || ""), String(b.game.created || "")) || byTitle(a, b);
     const played = this.user?.gamePlayed || {};
@@ -2974,10 +3000,17 @@ Are you sure you want to continue?`,
     if (!this._colSel) this._colSel = {};
     if (this.levels.length === 1) this._colSel[this.columns[this.selCat].id] = this.levels[0].sel;
     this.selCat = i;
-    const items = this.columns[i].items;
-    let sel = this._colSel[this.columns[i].id] ?? 0;
-    if (sel >= items.length) sel = Math.max(0, items.length - 1);
-    this.levels = [{ items, sel }];
+    const col = this.columns[i], items = col.items;
+    let sel = this._colSel[col.id];
+    if (sel == null && col.id === "users" && this.user) {
+      sel = items.findIndex((it) => it.act === "quit");
+    }
+    if (sel == null && col.id === "game") this.levels = this._gameFocusLevels(items);
+    else {
+      if (sel == null) sel = 0;
+      if (sel >= items.length) sel = Math.max(0, items.length - 1);
+      this.levels = [{ items, sel }];
+    }
     const w = this.root.clientWidth, h = this.root.clientHeight;
     this._layoutCats(w, h);   // categories slide (CSS transition) rather than snap
     this.$crumb.classList.remove("show");
@@ -3138,7 +3171,7 @@ Are you sure you want to continue?`,
   // the game's Sort By choice (older "title" / "created" choices: Creation Date ▼)
   _gameSortId() {
     const v = this.user?.gameSort;
-    return ["created_desc", "created_asc", "recent", "format"].includes(v) ? v : "created_desc";
+    return ["created_desc", "created_asc", "recent", "format"].includes(v) ? v : "recent";
   }
   // Delete (the game options): the console's confirmation (IMG_3553): the
   // game's icon with its name / date / size under it, the message and Yes / No
@@ -3190,12 +3223,11 @@ Are you sure you want to continue?`,
     // When the game ends the app notices by itself ("game-exited") and comes
     // back to the front; returning to it by hand works too.
     const fb = document.getElementById("fadeblack");
-    // (for Sort By > Recently Played)
-    if (this.user && game.folder) { (this.user.gamePlayed ||= {})[game.folder] = Date.now(); this._persistUser(); }
     // the screen dissolves into black first (the menu, the wave and the music
     // fading out with it), and only then does everything stop and the game start
     if (this._launching) return;
     this._launching = true;   // (no input meanwhile: see onInput)
+    document.body.classList.add("game-launching");
     fb.classList.add("show");
     const music = [this.audio.bg, this.audio.preview].filter((a) => a && !a.paused);
     const vols = music.map((a) => a.volume), t0 = performance.now(), FADE = 900;
@@ -3208,6 +3240,7 @@ Are you sure you want to continue?`,
       requestAnimationFrame(step);
       setTimeout(res, FADE + 300);   // (frames may be slow: never wait much longer)
     });
+    document.body.classList.remove("game-launching");
     this._launching = false;
     this._stopGameMedia();
     this.audio.enabled = false; this.audio.musicEnabled = false;
@@ -3228,9 +3261,11 @@ Are you sure you want to continue?`,
       this.audio.enabled = this.user?.soundEnabled !== false;
       this.audio.musicEnabled = this.user?.musicEnabled !== false;
       this.audio.leaveGame();
+      this._render();
       this._onSelect();
     };
     if (!r || r.ok === false) { restore(); setTimeout(() => this.audio.play("error", 0.5), 300); return; }
+    this._markGamePlayed(game);
     // the app still has the focus right after the launch: only a focus that
     // comes back after the game took it counts as "the user is back"
     onFocus = () => { if (armed) restore(); };
@@ -3243,7 +3278,7 @@ Are you sure you want to continue?`,
   }
 
   // ------------------------------------------------------------- users
-  async _signIn(user, opts = {}) {
+  async _signIn(user) {
     if (this._signingIn) return;
     this.audio.play("enter", 0.6);
     // Show a loading screen (Turn-Off-System style) while this profile's
@@ -3252,9 +3287,9 @@ Are you sure you want to continue?`,
     // the menu doesn't move meanwhile.
     this._signingIn = true;
     const showT = setTimeout(() => this._loadingBegin(), 60);
-    try { await this._signInSteps(user, showT, opts); } finally { this._signingIn = false; }
+    try { await this._signInSteps(user, showT); } finally { this._signingIn = false; }
   }
-  async _signInSteps(user, showT, opts = {}) {
+  async _signInSteps(user, showT) {
     const list = await call("list_users");
     const fresh = (list.users || []).find((u) => u.id === user.id) || user;
     call("set_active_user", { id: fresh.id });
@@ -3285,15 +3320,10 @@ Are you sure you want to continue?`,
     clearTimeout(showT);
     await this._loadingSettle();
     this.selCat = this.columns.findIndex((c) => c.id === "game");
-    let sel0 = 0;
-    // logging in (any way) starts on What's New
-    if (opts.startAt !== "game") {
-      const pi = this.columns.findIndex((c) => c.id === "psn");
-      const wi = pi >= 0 ? this.columns[pi].items.findIndex((x) => x.title === "What's New") : -1;
-      if (wi >= 0) { this.selCat = pi; sel0 = wi; }
-    }
     if (this.selCat < 0) this.selCat = 0;
-    this.levels = [{ items: this.columns[this.selCat].items, sel: sel0 }];
+    this.levels = this.columns[this.selCat].id === "game"
+      ? this._gameFocusLevels(this.columns[this.selCat].items)
+      : [{ items: this.columns[this.selCat].items, sel: 0 }];
     this._render(); this._onSelect();
     this._loadingDone();
   }
@@ -5255,6 +5285,7 @@ Are you sure you want to continue?`,
       case "theme_bgremove": return this._themeBgRemove();
       case "wave_reset": return this._resetWaveParams();
       case "turnoff": return this._turnOff();
+      case "quit": this.audio.play("enter", 0.6); call("quit_app"); return;
       case "bgmusic": return this._selectBgMusic();
       case "preload": return this._preloadAllSongs();
       case "preloadvideos": return this._preloadAllVideos();
@@ -6038,7 +6069,18 @@ Are you sure you want to continue?`,
       [{ label: "Yes", id: "yes" }, { label: "No", id: "no" }],
       (choice) => {
         this.confirm.close(); this.overlay = null;
-        if (choice && choice.id === "yes") { this.audio.play("enter", 0.6); call("quit_app"); }
+        if (choice && choice.id === "yes") {
+          this.audio.play("enter", 0.6);
+          call("shutdown_system").catch((e) => {
+            console.error("System shutdown failed", e);
+            this.audio.play("error", 0.5);
+            this.overlay = this.confirm;
+            this.confirm.open(`MaXMB could not shut down the PC.\n${String(e)}`,
+              [{ label: "OK", id: "ok" }],
+              () => { this.confirm.close(); this.overlay = null; },
+              () => { this.confirm.close(); this.overlay = null; });
+          });
+        }
       },
       () => { this.confirm.close(); this.overlay = null; });
   }

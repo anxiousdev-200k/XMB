@@ -150,7 +150,7 @@ pub struct User {
     #[serde(default)] pub friend_config: Option<serde_json::Value>,
     // Media section sort mode, per kind: { music, photo, video }
     #[serde(default)] pub media_mode: Option<serde_json::Value>,
-    // Game section order (game menu > Sort By): "title" | "created"
+    // Game section order (game menu > Sort By): "recent" | creation date | format
     #[serde(default)] pub game_sort: Option<String>,
     // this user's custom sections (System Settings > Sections)
     #[serde(default)] pub sections: Option<serde_json::Value>,

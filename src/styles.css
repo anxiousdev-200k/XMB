@@ -106,10 +106,14 @@ body.no-user .ib-profile { opacity: 0; visibility: hidden; transition: none; }
 /* ---------- XMB cross ---------- */
 .xmb { position: fixed; inset: 0; z-index: 10; opacity: 0; pointer-events: none; transition: opacity 0.5s ease, transform .22s ease; }
 .xmb.show { opacity: 1; pointer-events: auto; }
+body.game-launching .xmb { scale: 1.055; transition: opacity 0.5s ease, scale .9s cubic-bezier(.4,0,.2,1); }
 
 .bg-layer { position: absolute; inset: 0; background-size: cover; background-position: center;
   opacity: 0; transition: opacity 0.7s ease, transform .22s ease; z-index: -1; }
 .bg-layer.show { opacity: 1; }
+body.game-launching :is(#p3tbg, #wallpaper, #bgtint, #overlay, #wavegl, #wave) {
+  scale: 1.08; transition: filter .25s ease, scale .9s cubic-bezier(.4,0,.2,1);
+}
 
 /* the cross (categories, items, detail, anchor): positions come from the
    JS layout, matched to a real 1920x1080 XMB capture; no extra vertical shift. */
@@ -1589,10 +1593,10 @@ body.vp-form .form { z-index: 85; }
    game's background: a stripe fading to the right. Both in the Background
    Color, lighter (--menu-rgb, set with the colour) */
 .gamemenu::before { content: ""; position: absolute; top: 0; bottom: 0; left: 65.3vw; right: 0;
-  background: linear-gradient(90deg, rgba(var(--menu-rgb, 255,255,255),0.3) 0%, rgba(var(--menu-rgb, 255,255,255),0.2) 35%, rgba(var(--menu-rgb, 255,255,255),0.16) 100%); }
+  background: linear-gradient(90deg, rgba(var(--menu-rgb, 255,255,255),0.78) 0%, rgba(var(--menu-rgb, 255,255,255),0.7) 35%, rgba(var(--menu-rgb, 255,255,255),0.65) 100%); }
 .gm-line { position: absolute; top: 0; bottom: 0; left: 65.3vw; width: 1px; background: rgba(255,255,255,0.75);
   box-shadow: 0 0 0.4vh rgba(255,255,255,0.4); }
-.gamemenu.bg::before { background: linear-gradient(90deg, rgba(var(--menu-rgb, 200,80,60),0.85) 0%, rgba(var(--menu-rgb, 200,80,60),0.6) 40%, rgba(var(--menu-rgb, 200,80,60),0) 100%);
+.gamemenu.bg::before { background: linear-gradient(90deg, rgba(var(--menu-rgb, 200,80,60),0.94) 0%, rgba(var(--menu-rgb, 200,80,60),0.78) 40%, rgba(var(--menu-rgb, 200,80,60),0) 100%);
   right: auto; width: 17vw; }
 .gamemenu.bg .gm-line { opacity: 0.45; }
 .gm-top { position: absolute; left: 66.2vw; top: 31.7vh; }
@@ -1647,7 +1651,7 @@ body:has(.gamemenu.show) .tri-blur { display: block; }
 body:is(.menu-open, :has(.loading.show), :has(.colorpick.show), :has(.browser.show)):not(.pv-open):not(.video-open):not(.mpvis):not(.nomenublur):not(:has(.musicplayer.show:not(.dlg))) :is(#p3tbg, #wallpaper, #bgtint, #overlay, #wavegl, #wave) {
   filter: blur(16px); scale: 1.04; }
 body:has(.gamemenu.show):not(.menu-open):not(.pv-open):not(.video-open):not(.mpvis):not(.nomenublur):not(:has(.musicplayer.show:not(.dlg))) :is(#p3tbg, #wallpaper, #bgtint, #overlay, #wavegl, #wave) {
-  filter: blur(1.11vh); scale: 1.03; }
+  filter: blur(2vh); scale: 1.04; }
 body:is(.menu-open, :has(.loading.show), :has(.colorpick.show), :has(.browser.show), :has(.gamemenu.show)):not(.pv-open):not(.video-open):not(.mpvis) :is(.form, .loading, .colorpick, .browser, .gamedlg .vp-dlg, .tri-blur) {
   backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 body.nomenublur .tri-blur { display: none !important; }
@@ -1661,17 +1665,17 @@ body.nomenublur .tri-blur { display: none !important; }
 .gamemenu::before, .gamemenu .gm-line, .gm-top, .gm-lower { transition: none; }
 /* (the first panel's shading fades out before the second panel's rule) */
 .gamemenu.sub::before { left: 48.44vw; right: auto; width: 15.6vw;
-  background: linear-gradient(90deg, rgba(var(--menu-rgb, 255,255,255),0.3) 0%, rgba(var(--menu-rgb, 255,255,255),0.18) 45%, rgba(var(--menu-rgb, 255,255,255),0) 100%); }
+  background: linear-gradient(90deg, rgba(var(--menu-rgb, 255,255,255),0.78) 0%, rgba(var(--menu-rgb, 255,255,255),0.7) 45%, rgba(var(--menu-rgb, 255,255,255),0) 100%); }
 .gamemenu.sub.bg::before { width: 15.6vw;
-  background: linear-gradient(90deg, rgba(var(--menu-rgb, 200,80,60),0.85) 0%, rgba(var(--menu-rgb, 200,80,60),0.6) 40%, rgba(var(--menu-rgb, 200,80,60),0) 100%); }
+  background: linear-gradient(90deg, rgba(var(--menu-rgb, 200,80,60),0.94) 0%, rgba(var(--menu-rgb, 200,80,60),0.78) 40%, rgba(var(--menu-rgb, 200,80,60),0) 100%); }
 .gamemenu.sub .gm-line { left: 48.44vw; }
 .gamemenu.sub .gm-line.gm-line2 { left: 68.75vw; }
 .gamemenu.sub .gm-top, .gamemenu.sub .gm-lower { left: 49.34vw; }
 .gamemenu.sub .gm-arrow { display: none; }
 .gm-sub-bg { position: absolute; top: 0; bottom: 0; left: 68.75vw; right: 0;
-  background: linear-gradient(90deg, rgba(var(--menu-rgb, 255,255,255),0.3) 0%, rgba(var(--menu-rgb, 255,255,255),0.2) 35%, rgba(var(--menu-rgb, 255,255,255),0.16) 100%); }
+  background: linear-gradient(90deg, rgba(var(--menu-rgb, 255,255,255),0.78) 0%, rgba(var(--menu-rgb, 255,255,255),0.7) 35%, rgba(var(--menu-rgb, 255,255,255),0.65) 100%); }
 .gamemenu.bg .gm-sub-bg { right: auto; width: 17vw;
-  background: linear-gradient(90deg, rgba(var(--menu-rgb, 200,80,60),0.85) 0%, rgba(var(--menu-rgb, 200,80,60),0.6) 40%, rgba(var(--menu-rgb, 200,80,60),0) 100%); }
+  background: linear-gradient(90deg, rgba(var(--menu-rgb, 200,80,60),0.94) 0%, rgba(var(--menu-rgb, 200,80,60),0.78) 40%, rgba(var(--menu-rgb, 200,80,60),0) 100%); }
 .gm-subl { position: absolute; left: 69.65vw; }
 .gm-subl .gm-item { height: 3.7vh; width: 15vw; }
 .gm-tri { font-size: 1.5vh; margin-left: 0.45vw; position: relative; top: -0.15vh; }
@@ -1720,7 +1724,7 @@ body.nomenublur .gamedlg .vp-dlg { background: rgba(6,8,14,0.55); }
 .item.item-game.gm-band .item-label, .item.item-game.gm-band .game-fmt { translate: 3.42vw 0; }
 /* (and, over the system's own background, not a game's picture: the other
    categories' icons go blurred and the selected one's name hides) */
-body:has(.gamemenu.show:not(.bg)):not(.nomenublur) .cat:not(.sel) { filter: blur(0.4vh); transition: filter .2s ease; }
+body:has(.gamemenu.show:not(.bg)):not(.nomenublur) .cat:not(.sel) { filter: blur(1vh); transition: filter .2s ease; }
 body:has(.gamemenu.show:not(.bg)) .cat.sel .cat-label { opacity: 0; }
 /* Hide Game Title on Background: the name fades once the game's background is up */
 .item.bg-notitle .item-label, .item.bg-notitle .game-fmt { opacity: 0 !important; transition: opacity .4s ease; }

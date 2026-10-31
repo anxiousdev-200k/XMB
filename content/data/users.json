@@ -1,0 +1,152 @@
+{
+  "users": [
+    {
+      "id": "u1793445174306479900",
+      "name": "test",
+      "avatar": "stock:square_grey",
+      "psnAccountId": null,
+      "theme": {
+        "backgroundColor": "auto",
+        "waveColor": "auto",
+        "wavesEnabled": true,
+        "dotColor": "auto",
+        "dotsEnabled": true,
+        "iconColor": "auto",
+        "wallpaper": "C:\\Users\\Deki\\Pictures\\Wallpapers\\the-last-of-us-part-2-ellie-guitar-uhdpaper.com-4K-7.1128.jpg",
+        "overlay": null,
+        "chromaStrength": null,
+        "chromaKey": null,
+        "wallpaperFit": null,
+        "customColors": {},
+        "activeTheme": null,
+        "iconStyle": null,
+        "psnStyle": null,
+        "font": null,
+        "textColor": null,
+        "clockColor": null,
+        "fontSize": null,
+        "bgShuffle": null,
+        "ovShuffle": null,
+        "bgInterval": null,
+        "bgPlaylists": [],
+        "waveStyle": null,
+        "waveParams": {},
+        "wavePresets": null,
+        "themePresets": null,
+        "customBackup": {
+          "backgroundColor": "auto",
+          "bgInterval": null,
+          "bgPlaylists": [],
+          "bgShuffle": null,
+          "chromaKey": null,
+          "chromaStrength": null,
+          "clockColor": null,
+          "clockIconColor": null,
+          "customColors": {},
+          "dotColor": "auto",
+          "dotsEnabled": true,
+          "font": null,
+          "fontSize": null,
+          "homeStyle": null,
+          "iconColor": "auto",
+          "iconStyle": null,
+          "monthColors": null,
+          "ovInterval": null,
+          "ovShuffle": null,
+          "overlay": null,
+          "psnStyle": null,
+          "textColor": null,
+          "wallpaper": "C:\\Users\\Deki\\Pictures\\Wallpapers\\the-last-of-us-part-ii-ellie-playstation-4-2020-games-3840x2160-1879.jpg",
+          "wallpaperFit": null,
+          "waveColor": "auto",
+          "waveParams": {},
+          "wavesEnabled": true
+        },
+        "customTheme": "custom:tlou-4a23a2-6ae5eb53",
+        "iconTheme": "icon:TLOU Icons",
+        "ovPlaylists": [],
+        "p3tTheme": "p3t:the-last-of-us-murad-c772c629",
+        "soundTheme": "sound:Original Sounds",
+        "themeOpts": {
+          "icon:TLOU Icons": {
+            "iconAlpha": true,
+            "iconStyle": true
+          },
+          "p3t:joel-and-ellie-dynamic-theme-5d595a43": {
+            "background": false,
+            "overlay": false,
+            "sparkles": false,
+            "tBackground": true,
+            "tOverlay": true,
+            "waves": false
+          },
+          "p3t:the-last-of-us-multi-dynamic-2-604af78a": {
+            "tBackground": false
+          },
+          "p3t:the-last-of-us-murad-c772c629": {
+            "tBackground": false,
+            "tIcons": false
+          }
+        },
+        "waveV2": true,
+        "waveV3": true
+      },
+      "soundEnabled": true,
+      "musicEnabled": true,
+      "bgMusic": null,
+      "psnLinkedId": null,
+      "playlists": null,
+      "photoPlaylists": null,
+      "friendConfig": null,
+      "mediaMode": null,
+      "gameSort": null,
+      "sections": [],
+      "psnAutoSignIn": null,
+      "psnSaved": null,
+      "settingsCopy": {
+        "behavior": {
+          "autostart": false,
+          "bootAnimation": false,
+          "bootSound": "coldboot",
+          "bootSoundFile": "C:/Users/Deki/Documents/Codes/XMB\\content\\Sound Effects\\Original Sounds\\coldboot.ogg",
+          "brightness": 100,
+          "cacheInAppDir": false,
+          "dateFormat": "DD/MM/YYYY",
+          "deleteTempFiles": true,
+          "fullscreen": true,
+          "keepPreloadedSongs": false,
+          "keepPreloadedVideos": false,
+          "lowPowerMode": true,
+          "lowPowerOffOnce": true,
+          "motionSparkles": true,
+          "motionStrength": 5,
+          "musicVolume": 100,
+          "playAudioBackground": true,
+          "resolution": "native",
+          "sfxVolume": 100,
+          "startupSound": false,
+          "timeFormat": "24",
+          "virtualKeyboard": true,
+          "volume": 100,
+          "vsync": true
+        },
+        "gameMode": "app",
+        "input": {
+          "controller": true,
+          "deadzone": 0.5,
+          "keybinds": null,
+          "keyboard": true,
+          "mouse": true
+        },
+        "mediaMode": "app"
+      },
+      "createdAt": "1793445174",
+      "lastLogin": "1793448170",
+      "autoLogin": true,
+      "gamePlayed": {
+        "C:/Users/Deki/Documents/Codes/XMB\\content\\Games\\Assassins Creed Black Flag Resynced": 1793454600068
+      }
+    }
+  ],
+  "active": "u1793445174306479900"
+}

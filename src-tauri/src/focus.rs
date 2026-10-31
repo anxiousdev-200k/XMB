@@ -23,13 +23,10 @@ static WATCH_ID: AtomicU64 = AtomicU64::new(0);
 /// The page inside the app's window has the keyboard / controller focus
 /// (told by the page itself on focus / blur).
 static PAGE_FOCUSED: AtomicBool = AtomicBool::new(true);
-/// When the last game was started (ms since the app started), see `start_pad_watch`.
-static GAME_AT: AtomicU64 = AtomicU64::new(0);
 fn now_ms() -> u64 {
     static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     T0.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
 }
-
 #[tauri::command]
 pub fn page_focus(focused: bool) { PAGE_FOCUSED.store(focused, Ordering::Relaxed); }
 
@@ -72,7 +69,6 @@ fn front_now(app: &AppHandle) {
 /// when known; `dir`: the folder the game runs from, when known.
 pub fn watch_game(app: AppHandle, pid: Option<u32>, dir: Option<PathBuf>) {
     set_in_game(true);
-    GAME_AT.store(now_ms().max(1), Ordering::Relaxed);
     let id = WATCH_ID.fetch_add(1, Ordering::Relaxed) + 1;
     std::thread::spawn(move || {
         #[cfg(windows)]
@@ -82,15 +78,34 @@ pub fn watch_game(app: AppHandle, pid: Option<u32>, dir: Option<PathBuf>) {
             let mut tracked: Vec<u32> = pid.into_iter().collect();
             let mut seen = false;
             let mut gone = 0;
+            let mut foreground_tracked = false;
+            let mut last_scan = std::time::Instant::now();
             loop {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
+                std::thread::sleep(std::time::Duration::from_millis(200));
                 if WATCH_ID.load(Ordering::Relaxed) != id || !in_game() { return; }   // back in the app some other way
-                // the window that came to the front belongs to the game (or its launcher)
-                if let Some(fp) = win::foreground_pid() {
-                    if fp != std::process::id() && !win::is_shell_process(fp) && !tracked.contains(&fp) { tracked.push(fp); }
+                // Track the first foreground game process during launch, not
+                // unrelated apps the user may switch to later.
+                let foreground = win::foreground_pid();
+                if !foreground_tracked && started.elapsed() < std::time::Duration::from_secs(30) {
+                    if let Some(fp) = foreground {
+                        if fp != std::process::id() && !win::is_shell_process(fp) {
+                            if !tracked.contains(&fp) { tracked.push(fp); }
+                            foreground_tracked = true;
+                        }
+                    }
                 }
-                let mut alive = tracked.iter().any(|&p| win::alive(p));
-                if let Some(d) = dir.as_ref() { if win::any_running_from(d) { alive = true; } }
+                if !seen && tracked.iter().any(|&p| win::alive(p)) { seen = true; }
+                if seen && foreground == Some(std::process::id()) {
+                    if let Some(window) = win::window_for_pids(&tracked) { win::force_foreground(window); }
+                }
+                if last_scan.elapsed() < std::time::Duration::from_millis(1500) { continue; }
+                last_scan = std::time::Instant::now();
+                if let Some(d) = dir.as_ref() {
+                    for p in win::running_from(d) {
+                        if !tracked.contains(&p) { tracked.push(p); }
+                    }
+                }
+                let alive = tracked.iter().any(|&p| win::alive(p));
                 if alive { seen = true; gone = 0; continue; }
                 if !seen {
                     // nothing to follow (yet): give up after a while, the app comes
@@ -118,10 +133,8 @@ pub fn watch_game(app: AppHandle, pid: Option<u32>, dir: Option<PathBuf>) {
 /// no controller input, so the app looked stuck until the mouse was used. So
 /// while the app (or its page) isn't the one in front, the controller is
 /// watched here, and a press brings the app back to the front with its page
-/// focused. While a game runs, a press only does that once the game has no
-/// window in front any more (it ended without the app noticing): game mode
-/// ends then too. Not during the Internet Browser or a file window (they
-/// read the controller themselves).
+/// focused. A running game is left entirely to its own input until its process
+/// watcher reports that it has exited.
 pub fn start_pad_watch(app: AppHandle) {
     #[cfg(windows)]
     std::thread::spawn(move || {
@@ -133,14 +146,14 @@ pub fn start_pad_watch(app: AppHandle) {
         loop {
             std::thread::sleep(Duration::from_millis(50));
             if crate::browser::session_active() || crate::browser::picker_active() { prev = u32::MAX; continue; }
+            if in_game() { prev = u32::MAX; continue; }
             let Some(w) = app.get_webview_window("main") else { continue };
             let Ok(h) = w.hwnd() else { continue };
             let h = h.0 as isize;
             let fg = win::foreground();
             let fg_pid = win::foreground_pid().unwrap_or(0);
             let ours = fg == h || fg_pid == std::process::id();
-            let game = in_game();
-            if !game && ours && PAGE_FOCUSED.load(Ordering::Relaxed) {
+            if ours && PAGE_FOCUSED.load(Ordering::Relaxed) {
                 // all is well: look again in a moment (nothing is read)
                 prev = u32::MAX;
                 std::thread::sleep(Duration::from_millis(150));
@@ -153,23 +166,12 @@ pub fn start_pad_watch(app: AppHandle) {
             let pressed = (p.buttons & !prev) != 0 || (stick && !stick_was);
             prev = p.buttons; stick_was = stick;
             if !pressed { continue; }
-            if game {
-                // the game's window (or its launcher's) is still in front, or the
-                // game was only just started: the controller is the game's
-                if fg != 0 && !ours && !win::is_shell_process(fg_pid) { continue; }
-                if now_ms().saturating_sub(GAME_AT.load(Ordering::Relaxed)) < 6000 { continue; }
-                set_in_game(false);
-                bring_to_front(&app);
-                use tauri::Emitter;
-                let _ = app.emit("game-exited", ());
-                continue;
-            }
             let t = now_ms();
             if t.saturating_sub(last_front) > 500 { last_front = t; bring_to_front(&app); }
         }
     });
     #[cfg(not(windows))]
-    { let _ = (app, &GAME_AT); }
+    { let _ = (app, pid, dir, id); }
 }
 
 #[cfg(windows)]
@@ -179,6 +181,7 @@ mod win {
     type HWND = isize;
     type BOOL = i32;
     type HANDLE = isize;
+    type LPARAM = isize;
 
     #[repr(C)]
     struct PROCESSENTRY32W {
@@ -188,8 +191,10 @@ mod win {
 
     #[link(name = "user32")]
     extern "system" {
+        fn EnumWindows(cb: extern "system" fn(HWND, LPARAM) -> BOOL, data: LPARAM) -> BOOL;
         fn GetWindowThreadProcessId(h: HWND, pid: *mut u32) -> u32;
         fn GetForegroundWindow() -> HWND;
+        fn IsWindowVisible(h: HWND) -> BOOL;
         fn SetFocus(h: HWND) -> HWND;
         fn SwitchToThisWindow(h: HWND, alt_tab: BOOL);
         fn SetForegroundWindow(h: HWND) -> BOOL;
@@ -248,6 +253,31 @@ mod win {
         (p != 0).then_some(p)
     }
 
+    struct WindowFinder { pid: u32, hwnd: HWND }
+
+    extern "system" fn find_visible_window(hwnd: HWND, data: LPARAM) -> BOOL {
+        unsafe {
+            let finder = &mut *(data as *mut WindowFinder);
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == finder.pid && IsWindowVisible(hwnd) != 0 {
+                finder.hwnd = hwnd;
+                0
+            } else {
+                1
+            }
+        }
+    }
+
+    pub fn window_for_pids(pids: &[u32]) -> Option<HWND> {
+        for &pid in pids.iter().rev() {
+            let mut finder = WindowFinder { pid, hwnd: 0 };
+            unsafe { EnumWindows(find_visible_window, &mut finder as *mut WindowFinder as LPARAM); }
+            if finder.hwnd != 0 { return Some(finder.hwnd); }
+        }
+        None
+    }
+
     pub fn alive(pid: u32) -> bool {
         unsafe {
             let h = OpenProcess(SYNCHRONIZE, 0, pid);
@@ -287,19 +317,19 @@ mod win {
         d.components().count() >= 3 && !s.contains("\\windows\\") && !s.ends_with("\\windows")
     }
 
-    pub fn any_running_from(dir: &Path) -> bool {
+    pub fn running_from(dir: &Path) -> Vec<u32> {
         let want = dir.display().to_string().to_lowercase();
         unsafe {
             let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if snap == -1 || snap == 0 { return false; }
+            if snap == -1 || snap == 0 { return Vec::new(); }
             let mut e: PROCESSENTRY32W = std::mem::zeroed();
             e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-            let mut found = false;
+            let mut found = Vec::new();
             let mut ok = Process32FirstW(snap, &mut e) != 0;
             while ok {
                 if e.th32ProcessID != 0 && e.th32ProcessID != std::process::id() {
                     if let Some(p) = image_path(e.th32ProcessID) {
-                        if p.to_lowercase().starts_with(&want) { found = true; break; }
+                        if p.to_lowercase().starts_with(&want) { found.push(e.th32ProcessID); }
                     }
                 }
                 ok = Process32NextW(snap, &mut e) != 0;
