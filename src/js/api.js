@@ -145,6 +145,7 @@ export async function call(cmd, args = {}) {
     case "game_mode_end": return null;
     case "resume_game": case "quit_running_game": case "adjust_system_volume":
     case "open_sound_settings": case "sleep_system": return null;
+    case "game_session_state": return { active: false, xmbVisible: false };
     case "switch_output_device": return "Default output";
     case "list_fonts": return [];
     case "pick_font": return null;

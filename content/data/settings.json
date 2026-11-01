@@ -40,7 +40,8 @@
     "resolution": "native",
     "bootSoundFile": "C:/Users/Deki/Documents/Codes/XMB\\content\\Sound Effects\\Original Sounds\\coldboot.ogg",
     "lowPowerOffOnce": true,
-    "startupSound": false
+    "startupSound": false,
+    "stillWaves": false
   },
   "input": {
     "controller": true,

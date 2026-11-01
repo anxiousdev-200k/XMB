@@ -26,6 +26,10 @@ const infobox = new InfoBox(document.getElementById("infobox"));
 
 const settings = await call("get_settings");
 const appInfo = await call("app_info");
+const gameSession = await call("game_session_state").catch((e) => {
+  console.error("Could not recover the native game session state", e);
+  return null;
+});
 
 // apply system-wide volumes + brightness + time format from saved settings at boot
 audio.setMasterVolume((settings.behavior?.volume ?? 100) / 100);
@@ -68,12 +72,25 @@ const xmb = new Xmb(audio, wave, {
   infobox,
 });
 xmb.setContext(settings, appInfo);
-listen("game-home", () => xmb.returnToXmbFromGame(false));
-listen("game-quick-menu", () => xmb.returnToXmbFromGame(true));
+listen("game-home", () => {
+  gp.gameQuickCombo = false;
+  return xmb.returnToXmbFromGame(false);
+});
+listen("game-quick-menu", () => {
+  gp.gameQuickCombo = false;
+  return xmb.returnToXmbFromGame(true);
+});
+listen("game-exited", () => {
+  gp.gameQuickCombo = false;
+  xmb._finishGameSession();
+});
 listen("game-sleeping", () => xmb.prepareForSleep());
 listen("game-sleep-failed", () => xmb.restoreAfterSleepFailure());
 listen("game-wake-failed", () => xmb.restoreAfterSleepFailure());
-listen("game-woke", () => xmb.resumeAfterSleep());
+listen("game-woke", () => {
+  gp.gameQuickCombo = false;
+  return xmb.resumeAfterSleep();
+});
 
 // Dev/debug hooks (harmless in production): let headless tests and the console
 // reach the live XMB + wave instances.
@@ -535,7 +552,8 @@ async function boot() {
   // and no Automatic Login
   let loggedOut = false;
   try { loggedOut = sessionStorage.getItem("xmbLogOut") === "1"; sessionStorage.removeItem("xmbLogOut"); } catch (e) {}
-  const introOn = !loggedOut && settings.behavior?.bootAnimation !== false;
+  const recoveringGame = !!gameSession?.active;
+  const introOn = !loggedOut && !recoveringGame && settings.behavior?.bootAnimation !== false;
   // Console Startup Sound (System Settings, On by default) loads alongside
   // the first menu instead of adding a fixed sound-only wait.
   let su = null, startupReady = true, introStarted = false, introFinished = false, startupTimer = 0;
@@ -548,7 +566,7 @@ async function boot() {
   };
   audio._bufOn = settings.behavior?.bufferingSound === true;
   audio.bufVol = Math.max(0, Math.min(1, (settings.behavior?.bufferingVolume ?? 15) / 100));   // (decides how the startup sound ends)
-  if (!loggedOut && settings.behavior?.startupSound !== false) {
+  if (!loggedOut && !recoveringGame && settings.behavior?.startupSound !== false) {
     startupReady = false;
     audio.startupSound(0.85).then((handle) => {
       su = handle; startupReady = true; clearTimeout(startupTimer);
@@ -569,7 +587,7 @@ async function boot() {
   document.body.classList.add("intro-hold");
   audio.hold = true;
   try {
-    await xmb.start(manifest, { noAutoLogin: loggedOut });
+    await xmb.start(manifest, { noAutoLogin: loggedOut, recoverGame: gameSession });
   } catch (e) { console.error(e); }
   endBootClock();
   introStarted = true;

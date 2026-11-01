@@ -16,6 +16,7 @@ export class GameQuickMenu {
     this.el = document.getElementById("quickmenu");
     this.selected = 0;
     this.outputStatus = "";
+    this.activating = false;
   }
   open() {
     this.selected = 0;
@@ -54,30 +55,36 @@ export class GameQuickMenu {
     }
   }
   async _activate() {
-    switch (ACTIONS[this.selected].id) {
-      case "resume": this.onResume(); break;
-      case "volume": await this.adjustVolume(1); break;
-      case "output":
-        try {
-          this.outputStatus = `Output: ${await call("switch_output_device")}`;
-          this.render();
-        } catch (e) {
-          console.error("Switching output device failed", e);
-          this.outputStatus = `Output switch failed: ${e instanceof Error ? e.message : String(e)}`;
-          this.render();
-          this.audio.play("error", 0.5);
-        }
-        break;
-      case "sleep":
-        try { await call("sleep_system"); }
-        catch (e) {
-          console.error("System sleep failed", e);
-          this.outputStatus = `Rest Mode failed: ${e instanceof Error ? e.message : String(e)}`;
-          this.render();
-          this.audio.play("error", 0.5);
-        }
-        break;
-      case "shutdown": this.close(); this.onShutdown(); break;
+    if (this.activating) return;
+    this.activating = true;
+    try {
+      switch (ACTIONS[this.selected].id) {
+        case "resume": this.onResume(); break;
+        case "volume": await this.adjustVolume(1); break;
+        case "output":
+          try {
+            this.outputStatus = `Output: ${await call("switch_output_device")}`;
+            this.render();
+          } catch (e) {
+            console.error("Switching output device failed", e);
+            this.outputStatus = `Output switch failed: ${e instanceof Error ? e.message : String(e)}`;
+            this.render();
+            this.audio.play("error", 0.5);
+          }
+          break;
+        case "sleep":
+          try { await call("sleep_system"); }
+          catch (e) {
+            console.error("System sleep failed", e);
+            this.outputStatus = `Rest Mode failed: ${e instanceof Error ? e.message : String(e)}`;
+            this.render();
+            this.audio.play("error", 0.5);
+          }
+          break;
+        case "shutdown": this.close(); this.onShutdown(); break;
+      }
+    } finally {
+      this.activating = false;
     }
   }
   async adjustVolume(steps) {
@@ -91,6 +98,7 @@ export class GameQuickMenu {
   }
   onInput(action) {
     if (!this.el.classList.contains("show")) return;
+    if (this.activating) return;
     if (action === "up" || action === "down") {
       this.selected = (this.selected + (action === "down" ? 1 : ACTIONS.length - 1)) % ACTIONS.length;
       this.audio.play(action === "down" ? "cursor_down" : "cursor_up", 0.5);

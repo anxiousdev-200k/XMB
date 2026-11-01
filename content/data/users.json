@@ -12,7 +12,7 @@
         "dotColor": "auto",
         "dotsEnabled": true,
         "iconColor": "auto",
-        "wallpaper": "C:\\Users\\Deki\\Pictures\\Wallpapers\\the-last-of-us-part-2-ellie-guitar-uhdpaper.com-4K-7.1128.jpg",
+        "wallpaper": "C:\\Users\\Deki\\Pictures\\Wallpapers\\the-last-of-us-part-ii-ellie-playstation-4-2020-games-3840x2160-1879.jpg",
         "overlay": null,
         "chromaStrength": null,
         "chromaKey": null,
@@ -126,6 +126,7 @@
           "resolution": "native",
           "sfxVolume": 100,
           "startupSound": false,
+          "stillWaves": false,
           "timeFormat": "24",
           "virtualKeyboard": true,
           "volume": 100,
@@ -142,10 +143,10 @@
         "mediaMode": "app"
       },
       "createdAt": "1793445174",
-      "lastLogin": "1793519901",
+      "lastLogin": "1793536756",
       "autoLogin": true,
       "gamePlayed": {
-        "C:/Users/Deki/Documents/Codes/XMB\\content\\Games\\Assassins Creed Black Flag Resynced": 1793525185506
+        "C:/Users/Deki/Documents/Codes/XMB\\content\\Games\\Assassins Creed Black Flag Resynced": 1793538214897
       }
     }
   ],

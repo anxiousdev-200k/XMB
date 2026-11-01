@@ -452,15 +452,25 @@ export class Xmb {
     setPlayerIconTint({ r: 255, g: 255, b: 255, a: 1 });   // (the filter must exist before any player opens)
   }
 
-  async start(manifest, { noAutoLogin = false } = {}) {
+  async start(manifest, { noAutoLogin = false, recoverGame = null } = {}) {
     this.manifest = manifest;
     this.locked = true; this.user = null;
     await this._buildColumns();
     // Automatic Login: that user is logged in at once, on Game
-    const auto = noAutoLogin ? null : (this.usersFile?.users || []).find((u) => u.autoLogin);
+    let recoverUserId = null;
+    if (recoverGame?.active) {
+      try {
+        recoverUserId = sessionStorage.getItem("xmbGameUserId")
+          || localStorage.getItem("xmbGameUserId");
+      } catch (e) {}
+    }
+    const users = this.usersFile?.users || [];
+    const auto = (recoverUserId && users.find((u) => u.id === recoverUserId))
+      || (noAutoLogin ? null : users.find((u) => u.autoLogin));
     if (auto) {
       this.show();
       await this._signIn(auto);
+      if (recoverGame?.active) await this.restoreGameSession(recoverGame);
       this._applyPerformance();
       setTimeout(() => this._applyResolution(), 400);
       return;
@@ -3274,24 +3284,22 @@ Are you sure you want to continue?`,
     this._stopGameMedia();
     this.audio.enabled = false; this.audio.musicEnabled = false;
     this.audio.enterGame(); this._inGame = true; this.setLowPower(2);
+    this._saveGameSession(false);
     music.forEach((a, i) => { a.volume = vols[i]; });   // (paused by enterGame; back at their volume for later)
     document.body.classList.add("in-game");
     const r = await call("launch_game", { folder: game.folder, launch: game.launch, args: game.args || [] }).catch(() => null);
-    let unlisten = null;
-    const restore = () => {
-      if (!this._inGame) return;
-      if (unlisten) { try { unlisten(); } catch (e) {} }
+    if (!r || r.ok === false) {
       this._finishGameSession();
-    };
-    if (!r || r.ok === false) { restore(); setTimeout(() => this.audio.play("error", 0.5), 300); return; }
+      setTimeout(() => this.audio.play("error", 0.5), 300);
+      return;
+    }
     this._markGamePlayed(game);
-    const ev = window.__TAURI__?.event;
-    if (ev?.listen) ev.listen("game-exited", restore).then((u) => { unlisten = u; if (!this._inGame) u(); });
   }
   async returnToXmbFromGame(openQuickMenu = false) {
     if (!this._inGame) return;
     if (!this._gameReturned) {
       this._gameReturned = true;
+      this._saveGameSession(true);
       document.body.classList.remove("in-game");
       document.body.classList.add("game-session", "game-returning");
       const fade = document.getElementById("fadeblack");
@@ -3304,8 +3312,10 @@ Are you sure you want to continue?`,
       this.audio.enabled = this.user?.soundEnabled !== false;
       this.audio.musicEnabled = this.user?.musicEnabled !== false;
       this.audio.leaveGame();
-      this.setLowPower(2);
+      this.setLowPower(document.hasFocus() ? 0 : 1);
+      this._applyWaveStyle();
       this._applyWallpaper();
+      if (openQuickMenu) this.quickMenu.open();
       const gameIndex = this.columns.findIndex((c) => c.id === "game");
       if (gameIndex >= 0) {
         this.selCat = gameIndex;
@@ -3329,7 +3339,7 @@ Are you sure you want to continue?`,
         }
       }
     }
-    if (openQuickMenu) this.quickMenu.open();
+    if (openQuickMenu && !this.quickMenu.el.classList.contains("show")) this.quickMenu.open();
   }
   async _resumeTrackedGame() {
     if (!this._inGame || !this._gameReturned) return;
@@ -3350,6 +3360,7 @@ Are you sure you want to continue?`,
       return;
     }
     this._gameReturned = false;
+    this._saveGameSession(false);
     document.body.classList.remove("game-session");
     document.body.classList.add("in-game");
     document.body.classList.remove("game-leaving");
@@ -3373,6 +3384,7 @@ Are you sure you want to continue?`,
     if (!this._inGame || !this._gameReturned) return;
     this.quickMenu.close();
     this._gameReturned = false;
+    this._saveGameSession(false);
     document.getElementById("fadeblack")?.classList.add("show");
     document.body.classList.remove("game-session");
     document.body.classList.add("in-game");
@@ -3389,6 +3401,7 @@ Are you sure you want to continue?`,
     document.getElementById("fadeblack")?.classList.remove("show");
     this._inGame = false;
     this._gameReturned = false;
+    this._saveGameSession(false, true);
     this.setLowPower(document.hasFocus() ? 0 : 1);
     this.audio.enabled = this.user?.soundEnabled !== false;
     this.audio.musicEnabled = this.user?.musicEnabled !== false;
@@ -3402,6 +3415,67 @@ Are you sure you want to continue?`,
       this._render(); this._onSelect();
     })
       .catch((e) => console.error("Refreshing games after session ended failed", e));
+  }
+  _saveGameSession(returned, clear = false) {
+    try {
+      if (clear) {
+        sessionStorage.removeItem("xmbGameSession");
+        sessionStorage.removeItem("xmbGameReturned");
+        sessionStorage.removeItem("xmbGameUserId");
+        localStorage.removeItem("xmbGameSession");
+        localStorage.removeItem("xmbGameReturned");
+        localStorage.removeItem("xmbGameUserId");
+        return;
+      }
+      sessionStorage.setItem("xmbGameSession", "1");
+      sessionStorage.setItem("xmbGameReturned", returned ? "1" : "0");
+      localStorage.setItem("xmbGameSession", "1");
+      localStorage.setItem("xmbGameReturned", returned ? "1" : "0");
+      if (this.user?.id) {
+        sessionStorage.setItem("xmbGameUserId", this.user.id);
+        localStorage.setItem("xmbGameUserId", this.user.id);
+      }
+    } catch (e) {
+      console.warn("Could not persist the game session across a webview reload", e);
+    }
+  }
+  async restoreGameSession(state) {
+    if (!state?.active || !this.user) return;
+    this._inGame = true;
+    let returned = !!state.xmbVisible;
+    try {
+      if (sessionStorage.getItem("xmbGameSession") === "1") {
+        returned = sessionStorage.getItem("xmbGameReturned") === "1";
+      } else if (localStorage.getItem("xmbGameSession") === "1") {
+        returned = localStorage.getItem("xmbGameReturned") === "1";
+      }
+    } catch (e) {}
+    this._gameReturned = returned;
+    this.audio.enterGame();
+    this.setLowPower(returned ? 0 : 2);
+    if (!returned) {
+      document.body.classList.add("in-game");
+      document.getElementById("fadeblack")?.classList.add("show");
+      return;
+    }
+    document.body.classList.add("game-session");
+    document.body.classList.remove("in-game");
+    this.audio.enabled = this.user.soundEnabled !== false;
+    this.audio.musicEnabled = this.user.musicEnabled !== false;
+    this.audio.leaveGame();
+    this._applyWaveStyle();
+    this._applyWallpaper();
+    const gameIndex = this.columns.findIndex((c) => c.id === "game");
+    if (gameIndex < 0) return;
+    this.selCat = gameIndex;
+    await this._refreshGameColumn();
+    const items = this.columns[gameIndex].items;
+    const quitIndex = items.findIndex((item) => item.act === "quit_running_game");
+    this.levels = [{ items, sel: Math.max(0, quitIndex) }];
+    this._colSel ||= {};
+    this._colSel.game = this.levels[0].sel;
+    this._render();
+    this._onSelect();
   }
   async _quitTrackedGame() {
     this.overlay = this.confirm;
@@ -6560,7 +6634,7 @@ Are you sure you want to continue?`,
   // Low performance mode: 1 while the app is out of focus, 2 while a game runs
   // (the wave slows down / stops, animations and background videos pause)
   setLowPower(level) {
-    if (this._inGame && level < 2) level = 2;
+    if (this._inGame && !this._gameReturned && level < 2) level = 2;
     // Power Save Settings: off (a running game still stops everything)
     if (!this.settings?.behavior?.lowPowerMode && !this._inGame) level = 0;
     if (this._lowPower === level) return;
@@ -6659,11 +6733,11 @@ Are you sure you want to continue?`,
     // no leaving, no other action until it finishes.
     if (this._preloadState === "loading" || this._busy || this._signingIn || this._launching) return;
     if (this.quickMenu.el.classList.contains("show")) { this.quickMenu.onInput(a); return; }
-    if (this._inGame && this._gameReturned && a === "back") {
+    if (this.overlay) { this.overlay.onInput(a); return; }
+    if (this._inGame && this._gameReturned && this.levels.length === 1 && a === "back") {
       this._resumeTrackedGame();
       return;
     }
-    if (this.overlay) { this.overlay.onInput(a); return; }
     if (this._placing) { this._placeInput(a); return; }     // moving a section
     if (this._busy) return;                                   // converting a video
     if (this._actBusy) return;                                // something chosen is still working (see _trackBusy)

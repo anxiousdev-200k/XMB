@@ -38,6 +38,26 @@ use models::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static REST_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+struct RestModeGuard;
+
+impl RestModeGuard {
+    fn acquire() -> Result<Self, String> {
+        REST_MODE_ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self)
+            .map_err(|_| "Rest Mode is already in progress.".to_string())
+    }
+}
+
+impl Drop for RestModeGuard {
+    fn drop(&mut self) {
+        REST_MODE_ACTIVE.store(false, Ordering::Release);
+    }
+}
 
 // ----------------------------- PSN avatars --------------------------------
 
@@ -718,6 +738,14 @@ fn shutdown_system(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn resume_game() -> Result<(), String> { focus::resume_game() }
 
+#[tauri::command]
+fn game_session_state() -> serde_json::Value {
+    serde_json::json!({
+        "active": focus::in_game(),
+        "xmbVisible": focus::xmb_during_game(),
+    })
+}
+
 #[tauri::command(async)]
 fn quit_running_game(app: AppHandle) -> Result<(), String> {
     focus::quit_running_game()?;
@@ -785,6 +813,8 @@ fn switch_output_device() -> Result<String, String> { audio_device::cycle_defaul
 
 #[tauri::command(async)]
 fn sleep_system(app: AppHandle) -> Result<(), String> {
+    let _guard = RestModeGuard::acquire()?;
+    log::line("INFO", "power", "Rest Mode requested.");
     #[cfg(windows)]
     {
         #[link(name = "PowrProf")]
@@ -792,21 +822,36 @@ fn sleep_system(app: AppHandle) -> Result<(), String> {
             fn SetSuspendState(hibernate: u8, force: u8, disable_wake_events: u8) -> u8;
         }
         let game_running = focus::in_game();
+        log::line(
+            "INFO",
+            "power",
+            &format!("Entering sleep; tracked game session: {game_running}."),
+        );
         if game_running {
+            focus::set_game_suspended(true);
             let _ = app.emit("game-sleeping", ());
             std::thread::sleep(std::time::Duration::from_millis(350));
         }
         if unsafe { SetSuspendState(0, 0, 0) } == 0 {
+            let error = std::io::Error::last_os_error();
+            log::line("ERROR", "power", &format!("Windows sleep request failed: {error}."));
+            if game_running { focus::set_game_suspended(false); }
             if game_running { let _ = app.emit("game-sleep-failed", ()); }
-            return Err(format!("Windows could not enter sleep: {}", std::io::Error::last_os_error()));
+            return Err(format!("Windows could not enter sleep: {error}"));
         }
+        log::line("INFO", "power", "Windows resumed from sleep.");
         if game_running {
-            if let Err(e) = focus::resume_game() {
+            let resume_result = focus::resume_game();
+            focus::set_game_suspended(false);
+            if let Err(e) = resume_result {
+                log::line("ERROR", "power", &format!("Could not restore game focus after sleep: {e}"));
                 let _ = app.emit("game-wake-failed", ());
                 return Err(e);
             }
+            log::line("INFO", "power", "Game focus restored after sleep.");
             let _ = app.emit("game-woke", ());
         }
+        log::line("INFO", "power", "Rest Mode handling completed.");
         Ok(())
     }
     #[cfg(not(windows))]
@@ -992,7 +1037,7 @@ pub fn run() {
             game_sources_remove,
             pick_folder,
             launch_game, game_mode_end, focus::page_focus, pick_file, image_has_alpha, game_media_set, game_scrape, game_scrape_waiting, game_scrape_queued,
-            resume_game, quit_running_game, adjust_system_volume, open_sound_settings, switch_output_device, sleep_system,
+            resume_game, game_session_state, quit_running_game, adjust_system_volume, open_sound_settings, switch_output_device, sleep_system,
             list_users,
             create_user,
             save_user,

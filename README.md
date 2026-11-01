@@ -160,6 +160,20 @@ The installers end up in `src-tauri/target/release/bundle/` (`nsis` for the .exe
 
 Use the **.exe installer** (`nsis`) if possible to install the system. It installs for your Windows user in a folder the system can write to, which it needs because it keeps everything (Users, settings, shortcuts, logs, etc) in its own `content` folder. The **.msi** installs into `Program Files`, where Windows doesn't let programs write, so the system can't save anything there unless it's run as administrator.
 
+**Make a portable folder (no installer)**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-portable.ps1
+```
+
+The script builds the Windows release without an installer and stages it in
+`src-tauri\target\release\portable\`. The folder contains `ps3xmb.exe`, the
+manual, runtime resources, and a copy of the complete `content` folder,
+including app data and the WebView profile. Keep `content` beside the
+executable when moving the folder. The destination PC needs the Microsoft Edge
+WebView2 Runtime. Files referenced outside `content` (such as installed games
+or media on another drive) are not copied and must be moved or selected again.
+
 ---
 
 ## Credits
