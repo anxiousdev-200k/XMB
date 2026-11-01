@@ -3293,24 +3293,34 @@ Are you sure you want to continue?`,
     if (!this._gameReturned) {
       this._gameReturned = true;
       document.body.classList.remove("in-game");
-      document.body.classList.add("game-session");
-      document.getElementById("fadeblack")?.classList.remove("show");
+      document.body.classList.add("game-session", "game-returning");
+      const fade = document.getElementById("fadeblack");
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          document.body.classList.remove("game-returning");
+          fade?.classList.remove("show");
+        });
+      });
       this.audio.enabled = this.user?.soundEnabled !== false;
       this.audio.musicEnabled = this.user?.musicEnabled !== false;
       this.audio.leaveGame();
       this.setLowPower(2);
+      this._applyWallpaper();
       const gameIndex = this.columns.findIndex((c) => c.id === "game");
       if (gameIndex >= 0) {
         this.selCat = gameIndex;
         this._colSel ||= {};
-        this._colSel.game = 0;
         this.columns[gameIndex].items = this._gameItems(this._lastGames || []);
-        this.levels = [{ items: this.columns[gameIndex].items, sel: 0 }];
+        const quitIndex = this.columns[gameIndex].items.findIndex((it) => it.act === "quit_running_game");
+        this._colSel.game = Math.max(0, quitIndex);
+        this.levels = [{ items: this.columns[gameIndex].items, sel: Math.max(0, quitIndex) }];
         this._render();
         this._onSelect();
         try {
           await this._refreshGameColumn();
-          this.levels = [{ items: this.columns[gameIndex].items, sel: 0 }];
+          const refreshedQuitIndex = this.columns[gameIndex].items.findIndex((it) => it.act === "quit_running_game");
+          this.levels = [{ items: this.columns[gameIndex].items, sel: Math.max(0, refreshedQuitIndex) }];
+          this._colSel.game = this.levels[0].sel;
           this._render();
           this._onSelect();
         } catch (e) {
@@ -3325,21 +3335,51 @@ Are you sure you want to continue?`,
     if (!this._inGame || !this._gameReturned) return;
     if (this._resumingGame) return;
     this._resumingGame = true;
+    this.quickMenu.close();
+    const fade = document.getElementById("fadeblack");
+    document.body.classList.add("game-leaving");
+    fade?.classList.add("show");
+    await new Promise((resolve) => setTimeout(resolve, 280));
     try { await call("resume_game"); }
     catch (e) {
       console.error("Could not return focus to the game", e);
       this.audio.play("error", 0.5);
+      document.body.classList.remove("game-leaving");
+      fade?.classList.remove("show");
       this._resumingGame = false;
       return;
     }
     this._gameReturned = false;
     document.body.classList.remove("game-session");
     document.body.classList.add("in-game");
+    document.body.classList.remove("game-leaving");
     this.audio.enabled = false;
     this.audio.musicEnabled = false;
     this.audio.enterGame();
     this.setLowPower(2);
     this._resumingGame = false;
+  }
+  prepareForSleep() {
+    if (!this._inGame || !this._gameReturned) return;
+    document.body.classList.add("game-leaving");
+    document.getElementById("fadeblack")?.classList.add("show");
+  }
+  restoreAfterSleepFailure() {
+    if (!this._inGame || !this._gameReturned) return;
+    document.body.classList.remove("game-leaving");
+    document.getElementById("fadeblack")?.classList.remove("show");
+  }
+  resumeAfterSleep() {
+    if (!this._inGame || !this._gameReturned) return;
+    this.quickMenu.close();
+    this._gameReturned = false;
+    document.getElementById("fadeblack")?.classList.add("show");
+    document.body.classList.remove("game-session");
+    document.body.classList.add("in-game");
+    this.audio.enabled = false;
+    this.audio.musicEnabled = false;
+    this.audio.enterGame();
+    this.setLowPower(2);
   }
   _finishGameSession() {
     if (!this._inGame) return;

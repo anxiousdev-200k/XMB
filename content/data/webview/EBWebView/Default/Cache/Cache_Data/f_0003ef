@@ -104,7 +104,7 @@ body.no-user .ib-profile { opacity: 0; visibility: hidden; transition: none; }
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.45)); }
 
 /* ---------- XMB cross ---------- */
-.xmb { position: fixed; inset: 0; z-index: 10; opacity: 0; pointer-events: none; transition: opacity 0.5s ease, transform .22s ease; }
+.xmb { position: fixed; inset: 0; z-index: 10; opacity: 0; pointer-events: none; transition: opacity 0.5s ease, transform .22s ease, scale .4s ease; }
 .xmb.show { opacity: 1; pointer-events: auto; }
 body.game-launching .xmb { scale: 1.055; transition: opacity 0.5s ease, scale .9s cubic-bezier(.4,0,.2,1); }
 
@@ -115,18 +115,24 @@ body.game-launching :is(#p3tbg, #wallpaper, #bgtint, #overlay, #wavegl, #wave) {
   scale: 1.08; transition: filter .25s ease, scale .9s cubic-bezier(.4,0,.2,1);
 }
 
-.quickmenu { position: fixed; inset: 0; z-index: 120; display: none; align-items: center; justify-content: center;
-  background: rgba(10,12,20,0.18); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
-.quickmenu.show { display: flex; }
+.quickmenu { position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .32s ease, visibility 0s linear .32s;
+  background: rgba(0,0,0,0.8); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.quickmenu.show { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity .32s ease, visibility 0s; }
 .quickmenu::before, .quickmenu::after { content: ""; position: fixed; left: 0; right: 0; height: 1.5px;
   background: rgba(255,255,255,0.85); pointer-events: none; }
 .quickmenu::before { top: 18.5vh; }
 .quickmenu::after { top: 81.5vh; }
 .quickmenu-content { width: 100%; }
-.quickmenu .confirm-title { margin-bottom: 4.1vh; }
-.quickmenu .confirm-opts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1vw; padding: 0 3vw; }
-.quickmenu-opt { max-width: none; min-height: 5vh; white-space: normal; }
+.quickmenu .confirm-opts { display: flex; flex-direction: column; align-items: center; gap: 1vh; padding: 0 3vw; }
+.quickmenu-opt { width: min(460px, 82vw); min-height: 5vh; white-space: normal; }
+.quickmenu-status { min-height: 2.5vh; margin-top: 1.5vh; font-size: 1.7vh; opacity: .8; text-align: center; }
 .quickmenu-foot { gap: 7vw; }
+body.game-returning #xmb { opacity: 0; scale: 1.035; }
+body.game-returning #infobox { opacity: 0; }
+body.game-leaving #xmb, body.game-leaving #infobox { opacity: 0; }
+body.game-leaving #fadeblack { transition: opacity .28s ease; }
+body.in-game #fadeblack { opacity: 1; pointer-events: auto; transition: none; }
 
 /* the cross (categories, items, detail, anchor): positions come from the
    JS layout, matched to a real 1920x1080 XMB capture; no extra vertical shift. */
@@ -926,7 +932,7 @@ body.intro-hold #xmb { opacity: 0 !important; pointer-events: none !important; }
 /* starting a game: the whole screen dissolves into black (everything keeps
    moving underneath while it does), then the game starts */
 .fadeblack.show { opacity: 1; pointer-events: auto; transition: opacity 0.9s cubic-bezier(.4,0,.2,1); }
-body.game-session #fadeblack { opacity: 0; pointer-events: none; transition: none; }
+body.game-session:not(.game-leaving) #fadeblack { opacity: 0; pointer-events: none; transition: none; }
 /* screen brightness dimmer: a black veil whose opacity rises as brightness
    drops. Sits above the UI but below the game-launch fade, and never blocks
    input. */

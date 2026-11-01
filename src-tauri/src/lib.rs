@@ -3,6 +3,7 @@
 #[macro_use]
 mod log;
 mod audio;
+mod audio_device;
 mod copies;
 mod browser;
 mod cursorlock;
@@ -779,21 +780,37 @@ fn open_sound_settings() -> Result<(), String> {
     Err("Windows Sound settings are only available on Windows.".into())
 }
 
-#[tauri::command]
-fn sleep_system() -> Result<(), String> {
+#[tauri::command(async)]
+fn switch_output_device() -> Result<String, String> { audio_device::cycle_default_output() }
+
+#[tauri::command(async)]
+fn sleep_system(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
     {
         #[link(name = "PowrProf")]
         extern "system" {
             fn SetSuspendState(hibernate: u8, force: u8, disable_wake_events: u8) -> u8;
         }
+        let game_running = focus::in_game();
+        if game_running {
+            let _ = app.emit("game-sleeping", ());
+            std::thread::sleep(std::time::Duration::from_millis(350));
+        }
         if unsafe { SetSuspendState(0, 0, 0) } == 0 {
+            if game_running { let _ = app.emit("game-sleep-failed", ()); }
             return Err(format!("Windows could not enter sleep: {}", std::io::Error::last_os_error()));
+        }
+        if game_running {
+            if let Err(e) = focus::resume_game() {
+                let _ = app.emit("game-wake-failed", ());
+                return Err(e);
+            }
+            let _ = app.emit("game-woke", ());
         }
         Ok(())
     }
     #[cfg(not(windows))]
-    Err("System sleep is only supported on Windows.".into())
+    { let _ = app; Err("System sleep is only supported on Windows.".into()) }
 }
 
 // ---------------------------- icon shading cache -----------------------------
@@ -975,7 +992,7 @@ pub fn run() {
             game_sources_remove,
             pick_folder,
             launch_game, game_mode_end, focus::page_focus, pick_file, image_has_alpha, game_media_set, game_scrape, game_scrape_waiting, game_scrape_queued,
-            resume_game, quit_running_game, adjust_system_volume, open_sound_settings, sleep_system,
+            resume_game, quit_running_game, adjust_system_volume, open_sound_settings, switch_output_device, sleep_system,
             list_users,
             create_user,
             save_user,

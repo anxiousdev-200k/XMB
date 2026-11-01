@@ -70,6 +70,10 @@ const xmb = new Xmb(audio, wave, {
 xmb.setContext(settings, appInfo);
 listen("game-home", () => xmb.returnToXmbFromGame(false));
 listen("game-quick-menu", () => xmb.returnToXmbFromGame(true));
+listen("game-sleeping", () => xmb.prepareForSleep());
+listen("game-sleep-failed", () => xmb.restoreAfterSleepFailure());
+listen("game-wake-failed", () => xmb.restoreAfterSleepFailure());
+listen("game-woke", () => xmb.resumeAfterSleep());
 
 // Dev/debug hooks (harmless in production): let headless tests and the console
 // reach the live XMB + wave instances.

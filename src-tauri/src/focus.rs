@@ -51,14 +51,19 @@ pub fn resume_game() -> Result<(), String> {
     {
         let pids = ACTIVE_GAME_PIDS.lock().map_err(|e| e.to_string())?.clone();
         let process_ids: Vec<u32> = pids.iter().map(|(pid, _)| *pid).collect();
-        let window = win::window_for_pids(&process_ids)
-            .ok_or_else(|| "No visible window for the tracked game was found.".to_string())?;
-        win::force_foreground(window);
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if win::foreground() != window {
-            win::force_foreground(window);
+        let mut found_window = false;
+        for _ in 0..8 {
+            if let Some(window) = win::window_for_pids(&process_ids) {
+                found_window = true;
+                win::force_foreground(window);
+                if win::foreground() == window { break; }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
         }
-        if win::foreground() != window {
+        if !found_window {
+            return Err("No visible window for the tracked game was found.".into());
+        }
+        if !process_ids.contains(&win::foreground_pid().unwrap_or_default()) {
             return Err("Windows did not allow focus to return to the game.".into());
         }
         XMB_DURING_GAME.store(false, Ordering::Relaxed);

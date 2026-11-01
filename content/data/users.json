@@ -85,7 +85,8 @@
           },
           "p3t:the-last-of-us-murad-c772c629": {
             "tBackground": false,
-            "tIcons": false
+            "tIcons": false,
+            "tOverlay": true
           }
         },
         "waveV2": true,
@@ -141,10 +142,10 @@
         "mediaMode": "app"
       },
       "createdAt": "1793445174",
-      "lastLogin": "1793518594",
+      "lastLogin": "1793519901",
       "autoLogin": true,
       "gamePlayed": {
-        "C:/Users/Deki/Documents/Codes/XMB\\content\\Games\\Assassins Creed Black Flag Resynced": 1793518442208
+        "C:/Users/Deki/Documents/Codes/XMB\\content\\Games\\Assassins Creed Black Flag Resynced": 1793525185506
       }
     }
   ],
