@@ -714,6 +714,88 @@ fn shutdown_system(app: AppHandle) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn resume_game() -> Result<(), String> { focus::resume_game() }
+
+#[tauri::command(async)]
+fn quit_running_game(app: AppHandle) -> Result<(), String> {
+    focus::quit_running_game()?;
+    focus::set_in_game(false);
+    focus::bring_to_front(&app);
+    let _ = app.emit("game-exited", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn adjust_system_volume(steps: i32) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if !(-10..=10).contains(&steps) {
+            return Err("Volume adjustment must be between -10 and 10 steps.".into());
+        }
+        #[link(name = "user32")]
+        extern "system" {
+            fn keybd_event(key: u8, scan: u8, flags: u32, extra: usize);
+        }
+        const KEY_UP: u32 = 0x0002;
+        let key = if steps >= 0 { 0xAF } else { 0xAE };
+        for _ in 0..steps.unsigned_abs() {
+            unsafe {
+                keybd_event(key, 0, 0, 0);
+                keybd_event(key, 0, KEY_UP, 0);
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = steps;
+        Err("System volume control is only supported on Windows.".into())
+    }
+}
+
+#[tauri::command]
+fn open_sound_settings() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+        #[link(name = "shell32")]
+        extern "system" {
+            fn ShellExecuteW(hwnd: isize, operation: *const u16, file: *const u16,
+                parameters: *const u16, directory: *const u16, show_cmd: i32) -> isize;
+        }
+        let operation: Vec<u16> = OsStr::new("open").encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = OsStr::new("ms-settings:sound").encode_wide().chain(Some(0)).collect();
+        let result = unsafe {
+            ShellExecuteW(0, operation.as_ptr(), target.as_ptr(), std::ptr::null(),
+                std::ptr::null(), 1)
+        };
+        if result as isize <= 32 {
+            return Err(format!("Windows could not open Sound settings (ShellExecuteW: {result})."));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    Err("Windows Sound settings are only available on Windows.".into())
+}
+
+#[tauri::command]
+fn sleep_system() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        #[link(name = "PowrProf")]
+        extern "system" {
+            fn SetSuspendState(hibernate: u8, force: u8, disable_wake_events: u8) -> u8;
+        }
+        if unsafe { SetSuspendState(0, 0, 0) } == 0 {
+            return Err(format!("Windows could not enter sleep: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    Err("System sleep is only supported on Windows.".into())
+}
+
 // ---------------------------- icon shading cache -----------------------------
 // The glossy icon images are made in the webview; they're saved here so the
 // next start (or a refresh) can show them right away. Kept in the temporary
@@ -893,6 +975,7 @@ pub fn run() {
             game_sources_remove,
             pick_folder,
             launch_game, game_mode_end, focus::page_focus, pick_file, image_has_alpha, game_media_set, game_scrape, game_scrape_waiting, game_scrape_queued,
+            resume_game, quit_running_game, adjust_system_volume, open_sound_settings, sleep_system,
             list_users,
             create_user,
             save_user,

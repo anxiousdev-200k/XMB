@@ -68,6 +68,8 @@ const xmb = new Xmb(audio, wave, {
   infobox,
 });
 xmb.setContext(settings, appInfo);
+listen("game-home", () => xmb.returnToXmbFromGame(false));
+listen("game-quick-menu", () => xmb.returnToXmbFromGame(true));
 
 // Dev/debug hooks (harmless in production): let headless tests and the console
 // reach the live XMB + wave instances.
@@ -396,6 +398,10 @@ function readGamepad() {
   if (pad) {
     const map = padMap(pad);
     const press = (i) => pad.buttons[i] && pad.buttons[i].pressed;
+    const gameReturned = xmb._inGame && xmb._gameReturned;
+    const selectStart = !!press(map.select) && !!press(map.start);
+    if (gameReturned && selectStart && !gp.gameQuickCombo) xmb.quickMenu.open();
+    gp.gameQuickCombo = selectStart;
     // native feed active: just keep the edge state current, act on nothing
     if (xmb.browserActive && xmb.nativePad) {
       for (const n of ["cross", "circle", "triangle", "square", "select", "start", "l1", "r1", "l2", "r2", "l3", "r3"]) gp.prev[n] = press(map[n]);

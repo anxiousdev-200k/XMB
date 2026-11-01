@@ -16,6 +16,7 @@
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct PadState {
     pub buttons: u32,
+    pub guide: bool,
     /// sticks in -1..1, +x right, +y DOWN (screen direction)
     pub lx: f32,
     pub ly: f32,
@@ -65,6 +66,10 @@ mod imp {
     #[derive(Default, Clone, Copy)]
     struct XINPUT_STATE { dwPacketNumber: u32, Gamepad: XINPUT_GAMEPAD }
     type XInputGetStateFn = unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32;
+    struct XInput {
+        get_state: XInputGetStateFn,
+        get_state_ex: Option<XInputGetStateFn>,
+    }
 
     #[repr(C)]
     #[derive(Default, Clone, Copy)]
@@ -86,7 +91,7 @@ mod imp {
     #[link(name = "kernel32")]
     extern "system" {
         fn LoadLibraryW(name: *const u16) -> isize;
-        fn GetProcAddress(m: isize, name: *const u8) -> *const core::ffi::c_void;
+        fn GetProcAddress(m: isize, name: *const u8) -> *mut core::ffi::c_void;
     }
     #[link(name = "winmm")]
     extern "system" {
@@ -97,14 +102,21 @@ mod imp {
 
     fn wide(s: &str) -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() }
 
-    fn load_xinput() -> Option<XInputGetStateFn> {
+    fn load_xinput() -> Option<XInput> {
         for dll in ["xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"] {
             let w = wide(dll);
             let m = unsafe { LoadLibraryW(w.as_ptr()) };
             if m == 0 { continue; }
             let p = unsafe { GetProcAddress(m, b"XInputGetState\0".as_ptr()) };
             if !p.is_null() {
-                return Some(unsafe { std::mem::transmute::<*const core::ffi::c_void, XInputGetStateFn>(p) });
+                let get_state = unsafe { std::mem::transmute::<*const core::ffi::c_void, XInputGetStateFn>(p) };
+                // XInputGetStateEx is not in the documented Windows API. Some
+                // XInput runtimes export it at ordinal 100 and expose Guide.
+                let p = unsafe { GetProcAddress(m, 100usize as *const u8) };
+                let get_state_ex = (!p.is_null()).then(|| unsafe {
+                    std::mem::transmute::<*const core::ffi::c_void, XInputGetStateFn>(p)
+                });
+                return Some(XInput { get_state, get_state_ex });
             }
         }
         None
@@ -113,7 +125,7 @@ mod imp {
     struct Joy { id: u32, sony: bool, caps: JOYCAPSW }
 
     pub struct Reader {
-        xinput: Option<XInputGetStateFn>,
+        xinput: Option<XInput>,
         xslot: Option<u32>,
         next_xscan: Instant,
         joy: Option<Joy>,
@@ -134,8 +146,9 @@ mod imp {
         }
 
         fn read_x(&mut self, slot: u32) -> Option<PadState> {
-            let f = self.xinput?;
+            let xinput = self.xinput.as_ref()?;
             let mut s = XINPUT_STATE::default();
+            let f = xinput.get_state_ex.unwrap_or(xinput.get_state);
             if unsafe { f(slot, &mut s) } != 0 { return None; }
             let g = s.Gamepad;
             let w = g.wButtons as u32;
@@ -147,7 +160,7 @@ mod imp {
             for (m, bit) in map { if w & m != 0 { b |= bit; } }
             if g.bLeftTrigger > 60 { b |= B_L2; }
             if g.bRightTrigger > 60 { b |= B_R2; }
-            Some(PadState { buttons: b, lx: thumb(g.sThumbLX), ly: -thumb(g.sThumbLY),
+            Some(PadState { buttons: b, guide: w & 0x0400 != 0, lx: thumb(g.sThumbLX), ly: -thumb(g.sThumbLY),
                             rx: thumb(g.sThumbRX), ry: -thumb(g.sThumbRY) })
         }
 
@@ -186,7 +199,7 @@ mod imp {
                 if (13500..=22500).contains(&p) { b |= B_DOWN; }
                 if (22500..=31500).contains(&p) { b |= B_LEFT; }
             }
-            Some(PadState { buttons: b,
+            Some(PadState { buttons: b, guide: false,
                 lx: norm(i.dwXpos, c.wXmin, c.wXmax), ly: norm(i.dwYpos, c.wYmin, c.wYmax),
                 rx: norm(i.dwZpos, c.wZmin, c.wZmax), ry: norm(i.dwRpos, c.wRmin, c.wRmax) })
         }

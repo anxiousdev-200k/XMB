@@ -6,20 +6,23 @@
 //!   (Windows only lets the foreground app hand the foreground over; the usual
 //!   way round it is used: a tap of Alt, and attaching to the foreground
 //!   window's input for the call.)
-//! * Game mode: while a game runs, `in_game()` is true (the controller reader
-//!   sends nothing and the app idles). `watch_game` follows the game: the
+//! * Game mode: while a game runs, `in_game()` is true. `watch_game` follows
+//!   the game: the
 //!   process that was started, any program running from the game's folder,
 //!   and the window that comes to the front after the launch. When all of
 //!   them are gone, the app is told ("game-exited") and brought back.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 #[cfg(windows)]
 use tauri::Emitter;
 
 static IN_GAME: AtomicBool = AtomicBool::new(false);
+static XMB_DURING_GAME: AtomicBool = AtomicBool::new(false);
 static WATCH_ID: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_GAME_PIDS: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
 /// The page inside the app's window has the keyboard / controller focus
 /// (told by the page itself on focus / blur).
 static PAGE_FOCUSED: AtomicBool = AtomicBool::new(true);
@@ -34,7 +37,46 @@ pub fn page_focus(focused: bool) { PAGE_FOCUSED.store(focused, Ordering::Relaxed
 pub fn in_game() -> bool { IN_GAME.load(Ordering::Relaxed) }
 pub fn set_in_game(on: bool) {
     IN_GAME.store(on, Ordering::Relaxed);
-    if !on { WATCH_ID.fetch_add(1, Ordering::Relaxed); }   // any watcher stops
+    if on {
+        if let Ok(mut pids) = ACTIVE_GAME_PIDS.lock() { pids.clear(); }
+        XMB_DURING_GAME.store(false, Ordering::Relaxed);
+    } else {
+        XMB_DURING_GAME.store(false, Ordering::Relaxed);
+        if let Ok(mut pids) = ACTIVE_GAME_PIDS.lock() { pids.clear(); }
+        WATCH_ID.fetch_add(1, Ordering::Relaxed);   // any watcher stops
+    }
+}
+pub fn resume_game() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let pids = ACTIVE_GAME_PIDS.lock().map_err(|e| e.to_string())?.clone();
+        let process_ids: Vec<u32> = pids.iter().map(|(pid, _)| *pid).collect();
+        let window = win::window_for_pids(&process_ids)
+            .ok_or_else(|| "No visible window for the tracked game was found.".to_string())?;
+        win::force_foreground(window);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if win::foreground() != window {
+            win::force_foreground(window);
+        }
+        if win::foreground() != window {
+            return Err("Windows did not allow focus to return to the game.".into());
+        }
+        XMB_DURING_GAME.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    Err("Resuming tracked games is only supported on Windows.".into())
+}
+
+pub fn quit_running_game() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let pids = ACTIVE_GAME_PIDS.lock().map_err(|e| e.to_string())?.clone();
+        if pids.is_empty() { return Err("No tracked game process is available to quit.".into()); }
+        return win::terminate_process_tree(&pids);
+    }
+    #[cfg(not(windows))]
+    Err("Quitting tracked games is only supported on Windows.".into())
 }
 
 /// Make the app the foreground window again (and focus its page), so the
@@ -76,6 +118,10 @@ pub fn watch_game(app: AppHandle, pid: Option<u32>, dir: Option<PathBuf>) {
             let dir = dir.filter(|d| win::usable_dir(d));
             let started = std::time::Instant::now();
             let mut tracked: Vec<u32> = pid.into_iter().collect();
+            let mut killable: Vec<(u32, String)> = tracked.iter().filter_map(|&p| {
+                win::image_path(p).map(|path| (p, path))
+            }).collect();
+            if let Ok(mut active) = ACTIVE_GAME_PIDS.lock() { *active = killable.clone(); }
             let mut seen = false;
             let mut gone = 0;
             let mut foreground_tracked = false;
@@ -90,12 +136,17 @@ pub fn watch_game(app: AppHandle, pid: Option<u32>, dir: Option<PathBuf>) {
                     if let Some(fp) = foreground {
                         if fp != std::process::id() && !win::is_shell_process(fp) {
                             if !tracked.contains(&fp) { tracked.push(fp); }
+                            if !killable.iter().any(|(p, _)| *p == fp) {
+                                if let Some(path) = win::image_path(fp) { killable.push((fp, path)); }
+                                if let Ok(mut active) = ACTIVE_GAME_PIDS.lock() { *active = killable.clone(); }
+                            }
+                            seen = true;
                             foreground_tracked = true;
                         }
                     }
                 }
                 if !seen && tracked.iter().any(|&p| win::alive(p)) { seen = true; }
-                if seen && foreground == Some(std::process::id()) {
+                if seen && foreground == Some(std::process::id()) && !XMB_DURING_GAME.load(Ordering::Relaxed) {
                     if let Some(window) = win::window_for_pids(&tracked) { win::force_foreground(window); }
                 }
                 if last_scan.elapsed() < std::time::Duration::from_millis(1500) { continue; }
@@ -103,7 +154,11 @@ pub fn watch_game(app: AppHandle, pid: Option<u32>, dir: Option<PathBuf>) {
                 if let Some(d) = dir.as_ref() {
                     for p in win::running_from(d) {
                         if !tracked.contains(&p) { tracked.push(p); }
+                        if !killable.iter().any(|(pid, _)| *pid == p) {
+                            if let Some(path) = win::image_path(p) { killable.push((p, path)); }
+                        }
                     }
+                    if let Ok(mut active) = ACTIVE_GAME_PIDS.lock() { *active = killable.clone(); }
                 }
                 let alive = tracked.iter().any(|&p| win::alive(p));
                 if alive { seen = true; gone = 0; continue; }
@@ -141,12 +196,37 @@ pub fn start_pad_watch(app: AppHandle) {
         use std::time::Duration;
         let mut reader = crate::gamepad::Reader::new();
         let mut prev: u32 = 0;
+        let mut game_guide_prev = false;
+        let mut game_chord_prev = false;
         let mut stick_was = false;
         let mut last_front = 0u64;
         loop {
             std::thread::sleep(Duration::from_millis(50));
             if crate::browser::session_active() || crate::browser::picker_active() { prev = u32::MAX; continue; }
-            if in_game() { prev = u32::MAX; continue; }
+            if in_game() {
+                let Some(p) = reader.poll() else {
+                    game_guide_prev = false;
+                    game_chord_prev = false;
+                    continue;
+                };
+                let chord = p.buttons & (crate::gamepad::B_SELECT | crate::gamepad::B_START)
+                    == (crate::gamepad::B_SELECT | crate::gamepad::B_START);
+                let guide_pressed = p.guide && !game_guide_prev;
+                let chord_pressed = chord && !game_chord_prev;
+                game_guide_prev = p.guide;
+                game_chord_prev = chord;
+                let foreground_pid = win::foreground_pid().unwrap_or(0);
+                if foreground_pid != std::process::id() && (guide_pressed || chord_pressed) {
+                    XMB_DURING_GAME.store(true, Ordering::Relaxed);
+                    let event = if guide_pressed { "game-home" } else { "game-quick-menu" };
+                    let _ = app.emit(event, ());
+                    bring_to_front(&app);
+                }
+                prev = u32::MAX;
+                continue;
+            }
+            game_guide_prev = false;
+            game_chord_prev = false;
             let Some(w) = app.get_webview_window("main") else { continue };
             let Ok(h) = w.hwnd() else { continue };
             let h = h.0 as isize;
@@ -288,7 +368,7 @@ mod win {
         }
     }
 
-    fn image_path(pid: u32) -> Option<String> {
+    pub fn image_path(pid: u32) -> Option<String> {
         unsafe {
             let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if h == 0 { return None; }
@@ -337,5 +417,51 @@ mod win {
             CloseHandle(snap);
             found
         }
+    }
+
+    pub fn terminate_process_tree(processes: &[(u32, String)]) -> Result<(), String> {
+        use std::{os::windows::process::CommandExt, process::{Command, Stdio}, time::{Duration, Instant}};
+
+        let matches_identity = |(pid, expected): &(u32, String)| {
+            alive(*pid) && image_path(*pid).map(|p| p.eq_ignore_ascii_case(expected)).unwrap_or(false)
+        };
+        let active: Vec<(u32, String)> = processes.iter().filter(|p| matches_identity(p)).cloned().collect();
+        if active.is_empty() {
+            if !processes.iter().any(|(pid, _)| alive(*pid)) { return Ok(()); }
+            return Err("The tracked game process is no longer available or its identity changed.".into());
+        }
+        for (pid, expected) in &active {
+            if !matches_identity(&(*pid, expected.clone())) { continue; }
+            let pid_arg = pid.to_string();
+            Command::new("taskkill.exe")
+                .args(["/PID", pid_arg.as_str(), "/T"])
+                .creation_flags(0x0800_0000)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| format!("Could not request the game to close: {e}"))?;
+        }
+        let graceful_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < graceful_deadline && active.iter().any(matches_identity) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        for (pid, expected) in &active {
+            if !matches_identity(&(*pid, expected.clone())) { continue; }
+            let pid_arg = pid.to_string();
+            Command::new("taskkill.exe")
+                .args(["/PID", pid_arg.as_str(), "/T", "/F"])
+                .creation_flags(0x0800_0000)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| format!("Could not force-close the game: {e}"))?;
+        }
+        let force_deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < force_deadline && active.iter().any(matches_identity) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let remaining: Vec<String> = active.iter().filter(|p| matches_identity(p)).map(|(pid, _)| pid.to_string()).collect();
+        if remaining.is_empty() { Ok(()) }
+        else { Err(format!("The game process did not close (PID {}).", remaining.join(", "))) }
     }
 }

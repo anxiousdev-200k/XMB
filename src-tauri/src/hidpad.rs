@@ -131,7 +131,7 @@ pub fn latest() -> Option<HidState> {
 
 /// As the browser loop's PadState.
 pub fn latest_pad() -> Option<PadState> {
-    latest().map(|s| PadState { buttons: s.buttons, lx: s.lx, ly: s.ly, rx: s.rx, ry: s.ry })
+    latest().map(|s| PadState { buttons: s.buttons, guide: s.buttons & B_PS != 0, lx: s.lx, ly: s.ly, rx: s.rx, ry: s.ry })
 }
 
 #[cfg(not(windows))]

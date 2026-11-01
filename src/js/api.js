@@ -143,6 +143,8 @@ export async function call(cmd, args = {}) {
     case "pick_file": return null;
     case "image_has_alpha": return /\.png$/i.test(args.path || "");
     case "game_mode_end": return null;
+    case "resume_game": case "quit_running_game": case "adjust_system_volume":
+    case "open_sound_settings": case "sleep_system": return null;
     case "list_fonts": return [];
     case "pick_font": return null;
     case "game_meta_save": { const g = MOCK_GAMES.find((x) => x.folder === args.folder);

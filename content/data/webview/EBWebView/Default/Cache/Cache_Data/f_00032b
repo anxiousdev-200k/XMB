@@ -16,6 +16,7 @@ import { VideoPlayer } from "./videoplayer.js";
 import { PhotoViewer } from "./photoviewer.js";
 import { isDocPath, docThumb } from "./docs.js";
 import { GameMenu, GameInfo, GameConfirm } from "./gamemenu.js";
+import { GameQuickMenu } from "./quickmenu.js";
 import { UserInfo, IconChooser } from "./usermenus.js";
 import { SectionMethods, SECTION_MODES } from "./sections.js";
 import { KeybindMenu, ColorPicker, parseColor, colorHex, SideMenu, GameInfoPanel, TextForm, AvatarPicker, ListPicker, Confirm, MusicPlayer, PlaylistPicker, PhotoGrid, ProfileCard, PsnSignIn, holdAccel, VIRTUAL_KB, avatarSrc, isMaskAvatar, ALL_AVATARS, PSN_AVATARS, PSN_DEFAULT_AVATAR, randomPsnAvatar, avWaitCheck, STOCK_AVATARS, isStockAvatar, OnScreenKeyboard } from "./ui.js";
@@ -364,6 +365,10 @@ export class Xmb {
     this.gameInfo = new GameInfoPanel(audio);
     this.gameMenu = new GameMenu(audio);
     this.gameConfirm = new GameConfirm(audio);
+    this.quickMenu = new GameQuickMenu(audio, {
+      onResume: () => this._resumeTrackedGame(),
+      onShutdown: () => this._turnOff(),
+    });
     this.userInfo = new UserInfo(audio);
     this.iconChooser = new IconChooser(audio);
     this.gameInfo2 = new GameInfo(audio);
@@ -505,7 +510,7 @@ export class Xmb {
         // at the top, with account management below them.
         return { id: "users", label: this._loggedInOnce ? "Users" : "Log In", icon: "tex_user.png", items: [
           { kind: "action", act: "turnoff", title: "Turn Off System", sub: "", icon: { sys: "icon_poweroff.png" } },
-          { kind: "action", act: "quit", title: "Quit to Desktop", sub: "", icon: { sys: "icon_poweroff.png" } },
+          { kind: "action", act: "quit", title: "Quit to Desktop", sub: "", icon: { sys: "icon_quit.png" } },
           { kind: "newuser", title: "Create New User", sub: "", icon: { sys: "icon_newuser.png" } },
           ...uf.users.map((u) => ({ kind: "user", title: u.name, sub: "", icon: { avatar: u.avatar }, user: u })),
         ] };
@@ -953,6 +958,9 @@ export class Xmb {
     const fixed = [
       { kind: "ph", title: "Saved Data Utility", sub: uname, userSub: true, icon: { sys: "icon_savedata.png" } },
     ];
+    if (this._inGame && this._gameReturned) {
+      fixed.push({ kind: "action", act: "quit_running_game", title: "Quit Game", sub: "", icon: { sys: "icon_quit.png" } });
+    }
     this._gameFixedCount = fixed.length;
     // the disc (only one) sits above every other game, without a date line
     const disc = list.find((g) => g.isDisc);
@@ -3228,11 +3236,21 @@ Are you sure you want to continue?`,
     if (!r || r.ok === false) this.audio.play("error", 0.5);
   }
   async _launch(game) {
+    if (this._inGame) {
+      if (!this._gameReturned) return;
+      try { await call("quit_running_game"); }
+      catch (e) {
+        console.error("Could not close the running game before switching", e);
+        this.audio.play("error", 0.5);
+        return;
+      }
+      this._finishGameSession();
+    }
     // Game mode: fade to black, silence the whole app (whatever Play Audio in
     // Background says) and stop everything (wave, animations, videos, icon
     // loading, controller reading); the app stays full screen behind the game.
     // When the game ends the app notices by itself ("game-exited") and comes
-    // back to the front; returning to it by hand works too.
+    // back to the front; Guide / Select+Start can return here without ending it.
     const fb = document.getElementById("fadeblack");
     // the screen dissolves into black first (the menu, the wave and the music
     // fading out with it), and only then does everything stop and the game start
@@ -3259,33 +3277,106 @@ Are you sure you want to continue?`,
     music.forEach((a, i) => { a.volume = vols[i]; });   // (paused by enterGame; back at their volume for later)
     document.body.classList.add("in-game");
     const r = await call("launch_game", { folder: game.folder, launch: game.launch, args: game.args || [] }).catch(() => null);
-    let unlisten = null, armed = false, onFocus = null, vis = null;
+    let unlisten = null;
     const restore = () => {
       if (!this._inGame) return;
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", vis);
       if (unlisten) { try { unlisten(); } catch (e) {} }
-      call("game_mode_end").catch(() => {});
-      document.body.classList.remove("in-game");
-      fb.classList.remove("show");
-      this._inGame = false; this.setLowPower(document.hasFocus() ? 0 : 1);
-      this.audio.enabled = this.user?.soundEnabled !== false;
-      this.audio.musicEnabled = this.user?.musicEnabled !== false;
-      this.audio.leaveGame();
-      this._render();
-      this._onSelect();
+      this._finishGameSession();
     };
     if (!r || r.ok === false) { restore(); setTimeout(() => this.audio.play("error", 0.5), 300); return; }
     this._markGamePlayed(game);
-    // the app still has the focus right after the launch: only a focus that
-    // comes back after the game took it counts as "the user is back"
-    onFocus = () => { if (armed) restore(); };
-    vis = () => { if (document.hidden) armed = true; else if (armed) restore(); };
-    window.addEventListener("blur", () => { armed = true; }, { once: true });
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", vis);
     const ev = window.__TAURI__?.event;
     if (ev?.listen) ev.listen("game-exited", restore).then((u) => { unlisten = u; if (!this._inGame) u(); });
+  }
+  async returnToXmbFromGame(openQuickMenu = false) {
+    if (!this._inGame) return;
+    if (!this._gameReturned) {
+      this._gameReturned = true;
+      document.body.classList.remove("in-game");
+      document.body.classList.add("game-session");
+      document.getElementById("fadeblack")?.classList.remove("show");
+      this.audio.enabled = this.user?.soundEnabled !== false;
+      this.audio.musicEnabled = this.user?.musicEnabled !== false;
+      this.audio.leaveGame();
+      this.setLowPower(2);
+      const gameIndex = this.columns.findIndex((c) => c.id === "game");
+      if (gameIndex >= 0) {
+        this.selCat = gameIndex;
+        this._colSel ||= {};
+        this._colSel.game = 0;
+        this.columns[gameIndex].items = this._gameItems(this._lastGames || []);
+        this.levels = [{ items: this.columns[gameIndex].items, sel: 0 }];
+        this._render();
+        this._onSelect();
+        try {
+          await this._refreshGameColumn();
+          this.levels = [{ items: this.columns[gameIndex].items, sel: 0 }];
+          this._render();
+          this._onSelect();
+        } catch (e) {
+          console.error("Could not refresh the game list after returning from a game", e);
+          this.audio.play("error", 0.5);
+        }
+      }
+    }
+    if (openQuickMenu) this.quickMenu.open();
+  }
+  async _resumeTrackedGame() {
+    if (!this._inGame || !this._gameReturned) return;
+    if (this._resumingGame) return;
+    this._resumingGame = true;
+    try { await call("resume_game"); }
+    catch (e) {
+      console.error("Could not return focus to the game", e);
+      this.audio.play("error", 0.5);
+      this._resumingGame = false;
+      return;
+    }
+    this._gameReturned = false;
+    document.body.classList.remove("game-session");
+    document.body.classList.add("in-game");
+    this.audio.enabled = false;
+    this.audio.musicEnabled = false;
+    this.audio.enterGame();
+    this.setLowPower(2);
+    this._resumingGame = false;
+  }
+  _finishGameSession() {
+    if (!this._inGame) return;
+    call("game_mode_end").catch(() => {});
+    this.quickMenu.close();
+    document.body.classList.remove("in-game", "game-session");
+    document.getElementById("fadeblack")?.classList.remove("show");
+    this._inGame = false;
+    this._gameReturned = false;
+    this.setLowPower(document.hasFocus() ? 0 : 1);
+    this.audio.enabled = this.user?.soundEnabled !== false;
+    this.audio.musicEnabled = this.user?.musicEnabled !== false;
+    this.audio.leaveGame();
+    this._refreshGameColumn().then(() => {
+      if (this.columns[this.selCat]?.id === "game") {
+        this.levels = this._gameFocusLevels(this.columns[this.selCat].items);
+        this._colSel ||= {};
+        this._colSel.game = this.levels[0].sel;
+      }
+      this._render(); this._onSelect();
+    })
+      .catch((e) => console.error("Refreshing games after session ended failed", e));
+  }
+  async _quitTrackedGame() {
+    this.overlay = this.confirm;
+    this.confirm.open("Do you want to quit the running game?",
+      [{ label: "Yes", id: "yes" }, { label: "No", id: "no" }],
+      async (choice) => {
+        this.confirm.close(); this.overlay = null;
+        if (choice?.id !== "yes") return;
+        try { await call("quit_running_game"); }
+        catch (e) {
+          console.error("Could not quit the running game", e);
+          this.audio.play("error", 0.5);
+        }
+      },
+      () => { this.confirm.close(); this.overlay = null; });
   }
 
   // ------------------------------------------------------------- users
@@ -5300,6 +5391,7 @@ Are you sure you want to continue?`,
       case "theme_bgremove": return this._themeBgRemove();
       case "wave_reset": return this._resetWaveParams();
       case "turnoff": return this._turnOff();
+      case "quit_running_game": return this._quitTrackedGame();
       case "quit": this.audio.play("enter", 0.6); call("quit_app"); return;
       case "bgmusic": return this._selectBgMusic();
       case "preload": return this._preloadAllSongs();
@@ -6526,6 +6618,11 @@ Are you sure you want to continue?`,
     // while Preload All Songs is running, the menu is locked: no navigation,
     // no leaving, no other action until it finishes.
     if (this._preloadState === "loading" || this._busy || this._signingIn || this._launching) return;
+    if (this.quickMenu.el.classList.contains("show")) { this.quickMenu.onInput(a); return; }
+    if (this._inGame && this._gameReturned && a === "back") {
+      this._resumeTrackedGame();
+      return;
+    }
     if (this.overlay) { this.overlay.onInput(a); return; }
     if (this._placing) { this._placeInput(a); return; }     // moving a section
     if (this._busy) return;                                   // converting a video
