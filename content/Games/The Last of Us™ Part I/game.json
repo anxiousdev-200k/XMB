@@ -1,0 +1,17 @@
+{
+  "title": "The Last of Us Part I",
+  "parentalControl": null,
+  "created": "2025-06-25 10:54",
+  "size": "",
+  "version": "1.1.3.1",
+  "starts": "2024-04-25 22:20",
+  "isDisc": false,
+  "console": "PC",
+  "artSource": {
+    "background": "db",
+    "icon": "db"
+  },
+  "dbScraped": true,
+  "launch": "The Last of Us™ Part I.xmbl",
+  "sourceDir": "E:\\Games 1\\The Last of Us Part I"
+}

@@ -8,8 +8,10 @@
   "isDisc": false,
   "console": "PC",
   "artSource": {
-    "icon": "local"
+    "background": "db",
+    "icon": "db"
   },
+  "dbScraped": true,
   "launch": "Assassins Creed Black Flag Resynced.xmbl",
   "sourceDir": "E:\\Games 1\\Assassins Creed Black Flag Resynced"
 }

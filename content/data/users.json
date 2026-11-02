@@ -2,9 +2,9 @@
   "users": [
     {
       "id": "u1793445174306479900",
-      "name": "test",
-      "avatar": "stock:square_grey",
-      "psnAccountId": null,
+      "name": "dekifx",
+      "avatar": "stock:square_green",
+      "psnAccountId": "p1793541158139095600",
       "theme": {
         "backgroundColor": "auto",
         "waveColor": "auto",
@@ -95,15 +95,26 @@
       "soundEnabled": true,
       "musicEnabled": true,
       "bgMusic": null,
-      "psnLinkedId": null,
+      "psnLinkedId": "p1793541158139095600",
       "playlists": null,
       "photoPlaylists": null,
-      "friendConfig": null,
+      "friendConfig": {
+        "cards": [],
+        "count": 8,
+        "max": 30,
+        "min": 2,
+        "mode": "random",
+        "playerLevel": "random",
+        "playerPlus": true
+      },
       "mediaMode": null,
       "gameSort": null,
       "sections": [],
-      "psnAutoSignIn": null,
-      "psnSaved": null,
+      "psnAutoSignIn": true,
+      "psnSaved": {
+        "email": "deki@playstation.net",
+        "password": "12345678"
+      },
       "settingsCopy": {
         "behavior": {
           "autostart": false,

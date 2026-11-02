@@ -717,6 +717,8 @@ export class Xmb {
           sub: "On: Saves the converted videos after preloading on the system's directory instead of the Windows Temp folder. This means that the converted videos get saved instead of being deleted after turning off the system. This is recommended to not have to manually preload every time you enter into the system." },
       ],
       "Game Settings": [
+        { kind: "setting", ctl: "gamebgdarkness", title: "Game Background Darkness", icon: SI,
+          sub: "Darkens a selected game's background to keep the XMB title and text readable." },
         { kind: "drill", title: "Game Information", icon: SI, sub: "Edit each game's information.",
           childrenFn: this._gameSettingsList },
         { kind: "drill", title: "Game Recognition", icon: SI, sub: "Choose where to find games.",
@@ -2933,7 +2935,7 @@ Are you sure you want to continue?`,
     }
     // Always clear any backdrop first, so a previous subsection's background /
     // description never lingers (e.g. moving into the empty Friends column).
-    this.wave.setHidden(false); this.$bg.classList.remove("show"); this.$bg.style.backgroundImage = "";
+    this.wave.setHidden(false); this.$bg.classList.remove("show", "game-background"); this.$bg.style.backgroundImage = "";
     if (!it) { this._applyBgMusic(); this._refreshDetail(); return; }
     this._applyBgMusic();
     if (it.kind === "game" || it.extra) {
@@ -2988,7 +2990,10 @@ Are you sure you want to continue?`,
       const still = () => { const l = this._level(); return l.items[l.sel] === it && this._stillRevealed(it); };
       const show = () => {
         if (!still()) return;
-        this.$bg.style.backgroundImage = `url("${url}")`; this.$bg.classList.add("show"); this._syncWaveHidden();
+        this.$bg.style.backgroundImage = `url("${url}")`;
+        this.$bg.classList.add("game-background", "show");
+        this._applyGameBackgroundDarkness();
+        this._syncWaveHidden();
         // Hide Game Title on Background (Game Settings): the name goes once the background is up
         if ((it.game ? this._gameHideTitle(it.game) : this.settings?.behavior?.gameHideTitle) && it._el) it._el.classList.add("bg-notitle");
       };
@@ -3010,6 +3015,12 @@ Are you sure you want to continue?`,
       }
     }
     if (g.music && this.user && this.user.musicEnabled !== false) this.audio.playMusic(assetUrl(g.music));
+  }
+  _applyGameBackgroundDarkness() {
+    if (!this.$bg) return;
+    const raw = Number(this.settings?.behavior?.gameBackgroundDarkness ?? 50);
+    const darkness = [0, 25, 50, 75, 100].includes(raw) ? raw : 50;
+    this.$bg.style.setProperty("--game-bg-darkness", String(darkness / 100));
   }
   _stopGameMedia() {
     if (this._previewVid) {
@@ -3975,6 +3986,10 @@ Are you sure you want to continue?`,
       case "keepsongs": return s?.behavior?.keepPreloadedSongs ? "On" : "Off";
       case "mpvisualizer": return s?.behavior?.mpVisualizer === false ? "Off" : "On";
       case "gamenotitle": return s?.behavior?.gameHideTitle ? "On" : "Off";
+      case "gamebgdarkness": {
+        const value = Number(s?.behavior?.gameBackgroundDarkness ?? 50);
+        return `${[0, 25, 50, 75, 100].includes(value) ? value : 50}%`;
+      }
       case "gameband": return s?.behavior?.gameBand === false ? "Off" : "On";
       case "keepvideos": return s?.behavior?.keepPreloadedVideos ? "On" : "Off";
       case "deltemp": return s?.behavior?.deleteTempFiles ? "On" : "Off";
@@ -4313,6 +4328,9 @@ Are you sure you want to continue?`,
       || (!listed && (cur === "On" || cur === "Off") ? ["On", "Off"] : null);
     if (two) return { items: two.map((label) => ({ label, apply: () => { if (this._ctlValue(ctl) !== label) this._toggleSetting(it); } })), cur: two.indexOf(cur) };
     switch (ctl) {
+      case "gamebgdarkness": return list([[0, "Off"], [25, "25%"], [50, "50%"], [75, "75%"], [100, "100%"]],
+        [0, 25, 50, 75, 100].includes(Number(b.gameBackgroundDarkness)) ? Number(b.gameBackgroundDarkness) : 50,
+        (v) => { b.gameBackgroundDarkness = v; this._applyGameBackgroundDarkness(); this._persistSettings(); });
       case "dateformat": return list(["DD/MM/YYYY", "MM/DD/YYYY", "YYYY/MM/DD"].map((f) => [f, f]), b.dateFormat || "DD/MM/YYYY",
         (v) => { b.dateFormat = v; this.cbs.onDateFormat && this.cbs.onDateFormat(v); this._persistSettings(); });
       case "iconstyle": return list([["default", "Default"], ["glossy", "Glossy"], ["flat", "Flat"]], this._iconStyle(),

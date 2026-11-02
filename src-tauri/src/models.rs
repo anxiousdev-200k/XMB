@@ -210,6 +210,7 @@ pub struct Behavior {
     #[serde(default = "vol_full")] pub music_volume: u8, // Music Volume 0..100
     #[serde(default = "vol_full")] pub sfx_volume: u8,   // Sound Effects Volume 0..100
     #[serde(default = "vol_full")] pub brightness: u8,   // Screen brightness 20..100
+    #[serde(default = "game_bg_darkness_default")] pub game_background_darkness: u8, // game background overlay 0..100
     #[serde(default = "fmt24")] pub time_format: String, // "24" | "12"
     #[serde(default = "fmt_date")] pub date_format: String, // "DD/MM/YYYY" | "MM/DD/YYYY" | "YYYY/MM/DD"
     #[serde(default = "yes_bool")] pub play_audio_background: bool,
@@ -247,9 +248,10 @@ fn fmt_date() -> String { "DD/MM/YYYY".into() }
 fn yes_bool() -> bool { true }
 impl Default for Behavior {
     fn default() -> Self {
-        Self { fullscreen: true, autostart: false, boot_animation: true, boot_sound: "coldboot".into(), volume: 100, music_volume: 100, sfx_volume: 100, brightness: 100, time_format: "24".into(), date_format: "DD/MM/YYYY".into(), play_audio_background: true, delete_temp_files: true, keep_preloaded_songs: false, keep_preloaded_videos: false, cache_in_app_dir: false, vsync: true, motion_sparkles: true, low_power_mode: false, virtual_keyboard: true, motion_strength: 5, resolution: res_native(), extra: Default::default() }
+        Self { fullscreen: true, autostart: false, boot_animation: true, boot_sound: "coldboot".into(), volume: 100, music_volume: 100, sfx_volume: 100, brightness: 100, game_background_darkness: game_bg_darkness_default(), time_format: "24".into(), date_format: "DD/MM/YYYY".into(), play_audio_background: true, delete_temp_files: true, keep_preloaded_songs: false, keep_preloaded_videos: false, cache_in_app_dir: false, vsync: true, motion_sparkles: true, low_power_mode: false, virtual_keyboard: true, motion_strength: 5, resolution: res_native(), extra: Default::default() }
     }
 }
+fn game_bg_darkness_default() -> u8 { 50 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -406,5 +408,16 @@ mod keep_extra_tests {
         settings.switch_to_tv = true;
         let back = serde_json::to_value(settings).unwrap();
         assert_eq!(back["switchToTv"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn game_background_darkness_defaults_and_round_trips() {
+        let old: Behavior = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.game_background_darkness, 50);
+
+        let mut behavior = old;
+        behavior.game_background_darkness = 75;
+        let back = serde_json::to_value(behavior).unwrap();
+        assert_eq!(back["gameBackgroundDarkness"], serde_json::json!(75));
     }
 }

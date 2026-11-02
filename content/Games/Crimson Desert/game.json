@@ -1,0 +1,17 @@
+{
+  "title": "CRIMSON DESERT",
+  "parentalControl": null,
+  "created": "2026-08-18 08:13",
+  "size": "",
+  "version": "1.0.0.2079",
+  "starts": "2026-08-03 12:00",
+  "isDisc": false,
+  "console": "PC",
+  "artSource": {
+    "background": "db",
+    "icon": "db"
+  },
+  "dbScraped": true,
+  "launch": "Crimson Desert.xmbl",
+  "sourceDir": "E:\\Games 1\\Crimson Desert"
+}

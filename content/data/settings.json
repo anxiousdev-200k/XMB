@@ -61,13 +61,17 @@
   },
   "gameMode": "app",
   "gameSources": [
-    "E:\\Games 1\\Assassins Creed Black Flag Resynced"
+    "E:\\Games 1\\Assassins Creed Black Flag Resynced",
+    "E:\\Games 1",
+    "E:\\Games 3\\Assassin's Creed Odyssey",
+    "E:\\Games 3\\Grand Theft Auto V",
+    "E:\\Games 3\\Red Dead Redemption 2"
   ],
   "scrape": {
     "auto": null,
-    "sgdbKey": "",
+    "sgdbKey": "092875d88876fa8c7f36568bb64428f7",
     "tgdbKey": "",
-    "rawgKey": ""
+    "rawgKey": "bb9031ad743b4b1eae2ba3b73a45a5a6"
   },
   "sections": null
 }

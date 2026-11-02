@@ -1,0 +1,18 @@
+{
+  "title": "Grand Theft Auto V",
+  "parentalControl": null,
+  "created": "2025-08-16 22:23",
+  "size": "",
+  "version": "1.0.3570.0",
+  "starts": "2025-06-24 00:53",
+  "isDisc": false,
+  "console": "PC",
+  "artSource": {
+    "background": "db",
+    "icon": "db",
+    "preview": "db"
+  },
+  "dbScraped": true,
+  "launch": "Grand Theft Auto V.xmbl",
+  "sourceDir": "E:\\Games 3\\Grand Theft Auto V"
+}

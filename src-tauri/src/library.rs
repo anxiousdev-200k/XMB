@@ -23,7 +23,12 @@ use std::path::{Path, PathBuf};
 /// holds only a shortcut uses the shortcut's icon and name).
 pub fn scan(paths: &[String], icon_cache: Option<&Path>) -> Vec<Game> {
     let mut games = Vec::new();
+    let mut scanned_roots = std::collections::HashSet::new();
+    let mut scanned_games = std::collections::HashSet::new();
     for base in paths {
+        if !scanned_roots.insert(crate::paths::path_key(Path::new(base))) {
+            continue;
+        }
         let read = match fs::read_dir(base) {
             Ok(r) => r,
             Err(_) => continue, // path missing / unreadable -> skip, don't fail
@@ -32,13 +37,15 @@ pub fn scan(paths: &[String], icon_cache: Option<&Path>) -> Vec<Game> {
             let p = entry.path();
             if !p.is_dir() { continue; }
             if is_game_dir(&p) {
-                if let Some(game) = parse_game(&p, None, icon_cache) { games.push(game); }
+                if scanned_games.insert(crate::paths::path_key(&p)) {
+                    if let Some(game) = parse_game(&p, None, icon_cache) { games.push(game); }
+                }
             } else if let Ok(inner) = fs::read_dir(&p) {
                 // an album: a folder of game folders
                 let album = p.file_name().map(|n| n.to_string_lossy().to_string());
                 for e in inner.flatten() {
                     let gp = e.path();
-                    if gp.is_dir() && is_game_dir(&gp) {
+                    if gp.is_dir() && is_game_dir(&gp) && scanned_games.insert(crate::paths::path_key(&gp)) {
                         if let Some(game) = parse_game(&gp, album.clone(), icon_cache) { games.push(game); }
                     }
                 }
@@ -416,6 +423,25 @@ mod tests {
         assert!(g.icon.is_some(), "icon should resolve");
         assert!(g.background.is_some(), "background should resolve");
         assert!(g.preview.is_none(), "no preview present");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_deduplicates_repeated_and_overlapping_library_paths() {
+        let dir = std::env::temp_dir().join("xmb_scan_duplicate_paths_test");
+        let _ = fs::remove_dir_all(&dir);
+        let album = dir.join("Favourites");
+        let game = album.join("My Game");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("game.json"), r#"{"title":"My Game"}"#).unwrap();
+        fs::write(game.join("Game.exe"), b"x").unwrap();
+
+        let root = dir.to_string_lossy().to_string();
+        let nested = album.to_string_lossy().to_string();
+        let games = scan(&[root.clone(), root, nested], None);
+
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].copy, 1);
         let _ = fs::remove_dir_all(&dir);
     }
 

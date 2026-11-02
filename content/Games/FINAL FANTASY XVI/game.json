@@ -1,0 +1,17 @@
+{
+  "title": "Final Fantasy XVI",
+  "parentalControl": null,
+  "created": "2026-06-29 16:18",
+  "size": "",
+  "version": "1.03",
+  "starts": "2020-02-02 20:02",
+  "isDisc": false,
+  "console": "PC",
+  "artSource": {
+    "background": "db",
+    "icon": "db"
+  },
+  "dbScraped": true,
+  "launch": "FINAL FANTASY XVI.xmbl",
+  "sourceDir": "E:\\Games 1\\FINAL FANTASY XVI"
+}

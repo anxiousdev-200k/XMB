@@ -1,0 +1,17 @@
+{
+  "title": "Assassin's Creed Odyssey",
+  "parentalControl": null,
+  "created": "2022-05-21 10:54",
+  "size": "",
+  "version": "",
+  "starts": "2020-03-28 06:00",
+  "isDisc": false,
+  "console": "PC",
+  "artSource": {
+    "background": "db",
+    "icon": "db"
+  },
+  "dbScraped": true,
+  "launch": "Assassin's Creed Odyssey.xmbl",
+  "sourceDir": "E:\\Games 3\\Assassin's Creed Odyssey"
+}

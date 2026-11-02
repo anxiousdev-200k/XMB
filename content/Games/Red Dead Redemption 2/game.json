@@ -1,0 +1,17 @@
+{
+  "title": "Red Dead Redemption II",
+  "parentalControl": null,
+  "created": "2026-07-12 09:19",
+  "size": "",
+  "version": "1.0.1491.50",
+  "starts": "2018-09-22 01:11",
+  "isDisc": false,
+  "console": "PC",
+  "artSource": {
+    "background": "db",
+    "icon": "db"
+  },
+  "dbScraped": true,
+  "launch": "Red Dead Redemption 2.xmbl",
+  "sourceDir": "E:\\Games 3\\Red Dead Redemption 2"
+}

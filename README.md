@@ -166,11 +166,15 @@ Use the **.exe installer** (`nsis`) if possible to install the system. It instal
 powershell -ExecutionPolicy Bypass -File tools\build-portable.ps1
 ```
 
-The script builds the Windows release without an installer and stages it in
-`src-tauri\target\release\portable\`. The folder contains `ps3xmb.exe`, the
-manual, runtime resources, and a copy of the complete `content` folder,
-including app data and the WebView profile. Keep `content` beside the
-executable when moving the folder. The destination PC needs the Microsoft Edge
+The script builds the Windows release without an installer and stages it in a
+sibling `MaXMB-Portable` folder outside the repository. The folder contains
+`ps3xmb.exe`, the manual, runtime resources, and an independent snapshot of the
+complete `content` folder, including the game database, metadata, settings,
+and WebView profile. Paths to the development checkout are rebased into the
+portable folder. Release builds always use the `content` folder beside their
+executable; they do not honor the development content override or read/write
+the checkout's content. Keep `content` beside the executable when moving the
+folder. The destination PC needs the Microsoft Edge
 WebView2 Runtime. Files referenced outside `content` (such as installed games
 or media on another drive) are not copied and must be moved or selected again.
 

@@ -654,9 +654,20 @@ pub(crate) fn active_photos_dir(app: &AppHandle) -> std::path::PathBuf {
 fn current_settings(app: &AppHandle) -> Settings {
     let mut s = settings::load(&paths::settings_file(app)).unwrap_or_default();
     let ensure = |list: &mut Vec<String>, dir: String| -> bool {
-        if list.iter().any(|p| p == &dir) { false } else { list.push(dir); true }
+        let key = paths::path_key(std::path::Path::new(&dir));
+        if list.iter().any(|p| paths::path_key(std::path::Path::new(p)) == key) {
+            false
+        } else {
+            list.push(dir);
+            true
+        }
     };
     let mut changed = false;
+    changed |= paths::deduplicate_paths(&mut s.library_paths);
+    changed |= paths::deduplicate_paths(&mut s.music_paths);
+    changed |= paths::deduplicate_paths(&mut s.photo_paths);
+    changed |= paths::deduplicate_paths(&mut s.video_paths);
+    changed |= paths::deduplicate_paths(&mut s.subtitle_paths);
     changed |= ensure(&mut s.library_paths, paths::games_dir(app).display().to_string());
     changed |= ensure(&mut s.music_paths, paths::music_dir(app).display().to_string());
     changed |= ensure(&mut s.photo_paths, paths::photos_dir(app).display().to_string());

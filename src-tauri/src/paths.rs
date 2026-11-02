@@ -1,15 +1,16 @@
 //! Content lives in the app's own folder, not in AppData.
 //!
 //! `content_root` resolves to:
-//!   * a `content/` folder next to the executable in a real install, or
-//!   * `<project>/content/` during `tauri dev` (detected via the target dir),
-//!   * or an explicit `PS3XMB_CONTENT` override.
+//!   * `<project>/content/` during debug builds, or
+//!   * a `content/` folder next to the executable in release builds.
+//! `PS3XMB_CONTENT` is a debug-build-only override.
 //!
 //! Under it: `Games/`, `Music/`, `Photos/`, `Videos/`, `Themes/`, and a
 //! `data/` folder for `settings.json`, `users.json`, `psn.json`.
 
 use std::fs;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
 fn ensure(p: PathBuf) -> PathBuf {
@@ -17,23 +18,100 @@ fn ensure(p: PathBuf) -> PathBuf {
     p
 }
 
+pub(crate) fn path_key(path: &Path) -> String {
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) { key.to_lowercase() } else { key }
+}
+
+pub(crate) fn deduplicate_paths(paths: &mut Vec<String>) -> bool {
+    let mut seen = HashSet::new();
+    let original_len = paths.len();
+    paths.retain(|path| seen.insert(path_key(Path::new(path))));
+    paths.len() != original_len
+}
+
+fn dev_project_root(exe_dir: &Path) -> Option<PathBuf> {
+    let target_dir = exe_dir.parent()?;
+    if target_dir.file_name()? != "target" {
+        return None;
+    }
+
+    let src_tauri_dir = target_dir.parent()?;
+    if src_tauri_dir.file_name()? != "src-tauri" {
+        return None;
+    }
+
+    src_tauri_dir.parent().map(Path::to_path_buf)
+}
+
+fn content_root_for(exe_dir: &Path, development_build: bool) -> PathBuf {
+    if development_build {
+        if let Some(project) = dev_project_root(exe_dir) {
+            return project.join("content");
+        }
+    }
+    exe_dir.join("content")
+}
+
 pub fn content_root(_app: &AppHandle) -> PathBuf {
-    if let Ok(p) = std::env::var("PS3XMB_CONTENT") {
-        return ensure(PathBuf::from(p));
+    if cfg!(debug_assertions) {
+        if let Ok(p) = std::env::var("PS3XMB_CONTENT") {
+            return ensure(PathBuf::from(p));
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let s = dir.to_string_lossy().replace('\\', "/");
-            // Dev build: <project>/src-tauri/target/<profile>/exe
-            if let Some(idx) = s.find("/target/") {
-                let src_tauri = PathBuf::from(&s[..idx]); // <project>/src-tauri
-                let project = src_tauri.parent().map(|p| p.to_path_buf()).unwrap_or(src_tauri);
-                return ensure(project.join("content"));
-            }
-            return ensure(dir.join("content"));
+            return ensure(content_root_for(dir, cfg!(debug_assertions)));
         }
     }
-    ensure(PathBuf::from("content"))
+    if cfg!(debug_assertions) {
+        return ensure(PathBuf::from("content"));
+    }
+    ensure(std::env::temp_dir().join("MaXMB").join("content"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dev_project_root;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn detects_standard_dev_profile_directory() {
+        let exe_dir = Path::new(r"C:\MaXMB\src-tauri\target\release");
+        assert_eq!(
+            dev_project_root(exe_dir),
+            Some(PathBuf::from(r"C:\MaXMB"))
+        );
+    }
+
+    #[test]
+    fn does_not_treat_portable_folder_under_target_as_dev_build() {
+        let exe_dir = Path::new(r"C:\MaXMB\src-tauri\target\release\portable");
+        assert_eq!(
+            super::content_root_for(exe_dir, false),
+            PathBuf::from(r"C:\MaXMB\src-tauri\target\release\portable\content")
+        );
+    }
+
+    #[test]
+    fn release_build_in_target_directory_does_not_use_project_content() {
+        let exe_dir = Path::new(r"C:\MaXMB\src-tauri\target\release");
+        assert_eq!(
+            super::content_root_for(exe_dir, false),
+            PathBuf::from(r"C:\MaXMB\src-tauri\target\release\content")
+        );
+    }
+
+    #[test]
+    fn deduplicates_windows_paths_with_different_separators_and_case() {
+        let mut paths = vec![
+            r"C:\MaXMB-Portable\content\Games".to_string(),
+            "c:/maxmb-portable/content/games".to_string(),
+        ];
+        assert!(super::deduplicate_paths(&mut paths));
+        assert_eq!(paths.len(), 1);
+    }
 }
 
 pub fn data_dir(app: &AppHandle) -> PathBuf {
