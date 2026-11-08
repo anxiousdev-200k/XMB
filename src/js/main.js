@@ -209,6 +209,8 @@ window.addEventListener("blur", () => { for (const k of HOLD_KEYS) kbHeld[k] = f
 // they push the stick while held
 const LS = { ls_up: [0, -1], ls_down: [0, 1], ls_left: [-1, 0], ls_right: [1, 0] };
 const lsHeld = new Set();
+let appFocusAt = performance.now();
+window.addEventListener("focus", () => { appFocusAt = performance.now(); });
 function lsTick() {
   if (!lsHeld.size) return;
   let lx = 0, ly = 0; for (const k of lsHeld) { lx += LS[k][0]; ly += LS[k][1]; }
@@ -229,7 +231,11 @@ function bindAction(a, e) {
   // stays as it is) until it's pressed again
   if (a === "hud") { toggleHud(); return; }
   if (a === "brnexttab") { if (xmb.browserActive) xmb.browserButton("brnexttab"); return; }
-  if (a === "quit") { call("quit_app").catch(() => {}); return; }   // Close System (F4): no question asked
+  if (a === "quit") {
+    if (e?.repeat || performance.now() - appFocusAt < 400) return;
+    call("quit_app").catch(() => {});
+    return;
+  }   // Close System (F4): no question asked
   dispatch(a);
 }
 window.addEventListener("keydown", (e) => {

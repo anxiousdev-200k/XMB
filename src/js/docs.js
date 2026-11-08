@@ -1,7 +1,6 @@
 // Documents and comics shown page by page in the Photo Viewer (custom
 // sections): PDF (pdf.js), CBZ (zip, fflate) and CBT (tar). Each page becomes
-// an image URL; pages are made when they're first needed and kept for the
-// session.
+// an image URL; pages are made as needed and kept in a bounded document cache.
 //   pdf.js © Mozilla (Apache-2.0), fflate © Arjun Barrett (MIT): src/vendor
 
 import { cmpNatural } from "./api.js";
@@ -13,7 +12,32 @@ const natural = cmpNatural;
 const mime = (n) => /\.png$/i.test(n) ? "image/png" : /\.gif$/i.test(n) ? "image/gif" : /\.webp$/i.test(n) ? "image/webp"
   : /\.bmp$/i.test(n) ? "image/bmp" : /\.avif$/i.test(n) ? "image/avif" : "image/jpeg";
 
-const docs = new Map();      // url -> Promise<{ count, page(i) -> Promise<url> }>
+const docs = new Map();      // url -> { promise, refs }
+const MAX_DOCS = 4;
+const MAX_PAGES = 5;
+const MAX_THUMBS = 256;
+
+function revokePage(entry) {
+  if (!entry.url) return;
+  URL.revokeObjectURL(entry.url);
+  entry.url = null;
+}
+function trimPages(pages) {
+  while (pages.size > MAX_PAGES) {
+    const [i, entry] = pages.entries().next().value;
+    pages.delete(i);
+    revokePage(entry);
+  }
+}
+function trimDocs() {
+  while (docs.size > MAX_DOCS) {
+    const candidate = [...docs].find(([, entry]) => entry.refs === 0);
+    if (!candidate) return;
+    const [url, entry] = candidate;
+    docs.delete(url);
+    entry.promise.then((doc) => doc.dispose()).catch((error) => console.warn("document cache cleanup", error));
+  }
+}
 
 let _pdfjs = null;
 async function pdfjs() {
@@ -30,23 +54,45 @@ async function openPdf(url) {
   const lib = await pdfjs();
   const doc = await lib.getDocument({ url, isEvalSupported: false }).promise;
   const made = new Map();
+  let disposed = false;
   return {
     count: doc.numPages,
     page(i) {
-      if (!made.has(i)) made.set(i, (async () => {
-        const pg = await doc.getPage(i + 1);
-        const v1 = pg.getViewport({ scale: 1 });
-        const k = Math.min(3, 2200 / Math.max(v1.width, v1.height));
-        const vp = pg.getViewport({ scale: k });
-        const c = document.createElement("canvas");
-        c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
-        const ctx = c.getContext("2d");
-        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
-        await pg.render({ canvasContext: ctx, viewport: vp }).promise;
-        const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
-        return URL.createObjectURL(blob);
-      })());
-      return made.get(i);
+      if (disposed || i < 0 || i >= doc.numPages) return Promise.reject(new Error("document page is unavailable"));
+      let entry = made.get(i);
+      if (!entry) {
+        entry = { url: null, promise: null };
+        made.set(i, entry);
+        entry.promise = (async () => {
+          const pg = await doc.getPage(i + 1);
+          const v1 = pg.getViewport({ scale: 1 });
+          const k = Math.min(3, 2200 / Math.max(v1.width, v1.height));
+          const vp = pg.getViewport({ scale: k });
+          const c = document.createElement("canvas");
+          c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+          const ctx = c.getContext("2d");
+          ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+          await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+          const blob = await new Promise((resolve) => c.toBlob(resolve, "image/jpeg", 0.9));
+          const pageUrl = URL.createObjectURL(blob);
+          if (disposed || made.get(i) !== entry) {
+            URL.revokeObjectURL(pageUrl);
+            throw new Error("document page is no longer needed");
+          }
+          entry.url = pageUrl;
+          return pageUrl;
+        })();
+        trimPages(made);
+      } else {
+        made.delete(i); made.set(i, entry);
+      }
+      return entry.promise;
+    },
+    async dispose() {
+      disposed = true;
+      for (const entry of made.values()) revokePage(entry);
+      made.clear();
+      await doc.destroy();
     },
   };
 }
@@ -55,13 +101,28 @@ async function openPdf(url) {
 function fromEntries(entries) {
   entries.sort((a, b) => natural(a.name, b.name));
   const urls = new Map();
+  let disposed = false;
   return {
     count: entries.length,
     page(i) {
+      if (disposed) return Promise.reject(new Error("document is closed"));
       const e = entries[i];
       if (!e) return Promise.reject(new Error("no page"));
-      if (!urls.has(i)) urls.set(i, URL.createObjectURL(new Blob([e.data], { type: mime(e.name) })));
-      return Promise.resolve(urls.get(i));
+      let entry = urls.get(i);
+      if (entry) {
+        urls.delete(i); urls.set(i, entry);
+        return Promise.resolve(entry.url);
+      }
+      entry = { url: URL.createObjectURL(new Blob([e.data], { type: mime(e.name) })) };
+      urls.set(i, entry);
+      trimPages(urls);
+      return Promise.resolve(entry.url);
+    },
+    dispose() {
+      disposed = true;
+      for (const entry of urls.values()) revokePage(entry);
+      urls.clear();
+      entries.length = 0;
     },
   };
 }
@@ -89,30 +150,63 @@ async function openCbt(url) {
   return fromEntries(out);
 }
 
-export function openDoc(url, path) {
+function docEntry(url, path) {
   if (!docs.has(url)) {
     const p = String(path || url);
     const pr = /\.pdf$/i.test(p) ? openPdf(url) : /\.cbt$/i.test(p) ? openCbt(url) : openCbz(url);
-    pr.catch(() => docs.delete(url));
-    docs.set(url, pr);
+    const entry = { promise: pr, refs: 0 };
+    pr.catch(() => { if (docs.get(url) === entry) docs.delete(url); });
+    docs.set(url, entry);
   }
-  return docs.get(url);
+  const entry = docs.get(url);
+  docs.delete(url); docs.set(url, entry);
+  return entry;
+}
+export function openDoc(url, path) {
+  const entry = docEntry(url, path);
+  trimDocs();
+  return entry.promise;
+}
+export function retainDoc(url, path) {
+  const entry = docEntry(url, path);
+  entry.refs++;
+  return entry.promise.catch((error) => {
+    if (docs.get(url) === entry) { entry.refs--; trimDocs(); }
+    throw error;
+  });
+}
+export function releaseDoc(url) {
+  const entry = docs.get(url);
+  if (!entry || !entry.refs) return;
+  entry.refs--;
+  trimDocs();
 }
 
 // the first page, small, for the item's icon
 const thumbs = new Map();
 export function docThumb(url, path) {
   if (!thumbs.has(url)) {
-    thumbs.set(url, (async () => {
-      const d = await openDoc(url, path);
-      const src = await d.page(0);
-      const img = new Image(); img.src = src; await img.decode();
-      const k = Math.min(1, 480 / Math.max(img.naturalWidth, img.naturalHeight));
-      const c = document.createElement("canvas");
-      c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-      return c.toDataURL("image/jpeg", 0.85);
-    })());
+    const promise = (async () => {
+      let retained = false;
+      try {
+        const d = await retainDoc(url, path);
+        retained = true;
+        const src = await d.page(0);
+        const img = new Image(); img.src = src; await img.decode();
+        const k = Math.min(1, 480 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        return c.toDataURL("image/jpeg", 0.85);
+      } finally {
+        if (retained) releaseDoc(url);
+      }
+    })();
+    thumbs.set(url, promise);
+    promise.catch(() => { if (thumbs.get(url) === promise) thumbs.delete(url); });
   }
-  return thumbs.get(url);
+  const promise = thumbs.get(url);
+  thumbs.delete(url); thumbs.set(url, promise);
+  while (thumbs.size > MAX_THUMBS) thumbs.delete(thumbs.keys().next().value);
+  return promise;
 }

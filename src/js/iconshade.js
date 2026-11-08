@@ -130,17 +130,38 @@ function shadeDefault(d, alpha, S, tintIn, pix = null) {
 }
 
 const _cache = new Map();
+const _shadeRefs = new Map();
+const _blobUrls = new Map();
 // bump when the look changes, so saved images from an older look aren't reused
 const SHADE_VERSION = "g2";
 export const colorKey = (rgb) => rgb.map((c) => Math.round(c * 255)).join(",");
 const _ck = (key, rgb) => SHADE_VERSION + "|" + key + "|" + colorKey(rgb);
 let _added = 0;
+function cacheShade(key, value) {
+  const previous = _cache.get(key);
+  if (previous === value) return;
+  _cache.set(key, value);
+  _shadeRefs.set(value, (_shadeRefs.get(value) || 0) + 1);
+  if (previous) releaseShade(previous);
+}
+function deleteShade(key) {
+  const value = _cache.get(key);
+  if (!value || !_cache.delete(key)) return false;
+  releaseShade(value);
+  return true;
+}
+function releaseShade(value) {
+  const refs = _shadeRefs.get(value) || 0;
+  if (refs > 1) { _shadeRefs.set(value, refs - 1); return; }
+  _shadeRefs.delete(value);
+  dropShaded(value);
+}
 // saved shading (from the cache file): { "<version>|<icon>|<r,g,b>": dataURL }
 export function importShades(obj) {
   if (!obj || typeof obj !== "object") return 0;
   let n = 0;
   for (const [k, v] of Object.entries(obj)) {
-    if (k.startsWith(SHADE_VERSION + "|") && typeof v === "string" && v.startsWith("data:image/") && !_cache.has(k)) { _cache.set(k, v); n++; }
+    if (k.startsWith(SHADE_VERSION + "|") && typeof v === "string" && v.startsWith("data:image/") && !_cache.has(k)) { cacheShade(k, v); n++; }
   }
   return n;
 }
@@ -156,12 +177,19 @@ export function exportShades(colorKeys) {
 export function pruneShades(colorKeys) {
   const want = new Set(colorKeys);
   let n = 0;
-  for (const [k, v] of _cache) {
+  for (const [k] of _cache) {
     const c = k.slice(k.lastIndexOf("|") + 1);
     if (want.has(c)) continue;
-    _cache.delete(k); n++;
-    const b = _blobUrls.get(v);
-    if (b) { URL.revokeObjectURL(b); _blobUrls.delete(v); }
+    if (deleteShade(k)) n++;
+  }
+  return n;
+}
+export function dropThemeShades(live) {
+  let n = 0;
+  for (const [k] of _cache) {
+    const name = k.slice(k.indexOf("|") + 1).replace(/^(?:d:|~[a-z]+~)/, "");
+    const match = /^(?:t|c):((?:p3t|icon|custom):[^|]+)/.exec(name);
+    if (match && !live.has(match[1]) && deleteShade(k)) n++;
   }
   return n;
 }
@@ -174,7 +202,6 @@ export function takeNewShadeCount() { const n = _added; _added = 0; return n; }
 // saved between launches; written into the page, that long text is parsed
 // again and copied with every menu that's drawn, and the memory left behind
 // makes for long clean-up pauses on slow computers.
-const _blobUrls = new Map();
 export function shadeSrc(u) {
   if (!u || !u.startsWith("data:")) return u;
   let b = _blobUrls.get(u);
@@ -232,7 +259,7 @@ function _shadeIcon(img, colorRgb, key, style, own, crop) {
     for (let i = 0; i < S * S; i++) alpha[i] = d[i * 4 + 3] / 255;
     shadeDefault(d, alpha, S, colorRgb, pix);
     ctx.putImageData(id, 0, 0);
-    const u = crop ? _cropUrl(cv, S, dw, dh) : cv.toDataURL(); _cache.set(ck, u); _added++;
+    const u = crop ? _cropUrl(cv, S, dw, dh) : cv.toDataURL(); cacheShade(ck, u); _added++;
     return u;
   }
   let x0 = S, y0 = S, x1 = 0, y1 = 0;
@@ -278,7 +305,7 @@ function _shadeIcon(img, colorRgb, key, style, own, crop) {
   }
   ctx.putImageData(id, 0, 0);
   const url = crop ? _cropUrl(cv, S, dw, dh) : cv.toDataURL();
-  _cache.set(ck, url); _added++;
+  cacheShade(ck, url); _added++;
   return url;
 }
 // the middle dw x dh of a shaded square (the picture without the letterbox)
@@ -292,26 +319,73 @@ function _cropUrl(cv, S, dw, dh) {
 
 const _imgCache = new Map();
 const _imgLoaded = new Map();
+const _pinnedImages = new Set();
+const MAX_TRANSIENT_IMAGES = 256;
+function dropShaded(url) {
+  const blobUrl = _blobUrls.get(url);
+  if (blobUrl) {
+    _blobUrls.delete(url);
+    dropIconImage(blobUrl);
+    URL.revokeObjectURL(blobUrl);
+  }
+  dropIconImage(url);
+}
+export function dropIconImage(url) {
+  const entry = _imgCache.get(url);
+  if (entry) {
+    _imgCache.delete(url);
+    if (entry.blobUrl) {
+      URL.revokeObjectURL(entry.blobUrl);
+      entry.blobUrl = null;
+    }
+  }
+  _imgLoaded.delete(url);
+}
+function trimImageCache() {
+  let transientCount = 0;
+  for (const url of _imgCache.keys()) if (!_pinnedImages.has(url)) transientCount++;
+  while (transientCount > MAX_TRANSIENT_IMAGES) {
+    const url = [..._imgCache.keys()].find((key) => !_pinnedImages.has(key));
+    if (!url) return;
+    dropIconImage(url);
+    transientCount--;
+  }
+}
 // the decoded image if it has finished loading (synchronous)
 export function loadedIcon(url) { return _imgLoaded.get(url) || null; }
 export function loadIconImage(url) {
-  let p = _imgCache.get(url);
-  if (p) return p;
+  const cached = _imgCache.get(url);
+  if (cached) {
+    _imgCache.delete(url); _imgCache.set(url, cached);
+    return cached.promise;
+  }
+  const entry = { promise: null, blobUrl: null };
+  _imgCache.set(url, entry);
   // a picture from another address (the user's own files, through the asset
   // link) is read as a blob: copy first, so it can be shaded like the
   // system's own icons (drawn straight from there, it couldn't be read back)
   const other = (() => { try { return !/^(data|blob):/i.test(url) && new URL(url, location.href).origin !== location.origin; } catch (e) { return false; } })();
   const src = other ? fetch(url).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
-    .then((b) => URL.createObjectURL(b)).catch(() => url) : Promise.resolve(url);
-  p = src.then((s) => new Promise((resolve, reject) => {
+    .then((b) => {
+      if (_imgCache.get(url) !== entry) return url;
+      entry.blobUrl = URL.createObjectURL(b);
+      return entry.blobUrl;
+    }).catch(() => url) : Promise.resolve(url);
+  entry.promise = src.then((s) => new Promise((resolve, reject) => {
     const img = new Image();
     // decoded right away (off the main thread), so drawing it later is instant
-    img.onload = () => { _imgLoaded.set(url, img); (img.decode ? img.decode().catch(() => {}) : Promise.resolve()).then(() => resolve(img)); };
-    img.onerror = reject;
+    img.onload = () => {
+      if (_imgCache.get(url) === entry) _imgLoaded.set(url, img);
+      (img.decode ? img.decode().catch(() => {}) : Promise.resolve()).then(() => resolve(img));
+    };
+    img.onerror = (error) => {
+      if (_imgCache.get(url) === entry) dropIconImage(url);
+      reject(error);
+    };
     img.src = s;
   }));
-  _imgCache.set(url, p);
-  return p;
+  trimImageCache();
+  return entry.promise;
 }
 
 // The app's own pictures (assets/icons/index.json), all loaded and decoded up
@@ -319,6 +393,7 @@ export function loadIconImage(url) {
 // from the user's own files are not part of this: they load as they're shown.
 export async function preloadAppIcons(urls, parallel = 6) {
   const list = [...(urls || [])];
+  for (const url of list) _pinnedImages.add(url);
   const worker = async () => { while (list.length) { const u = list.shift(); try { await loadIconImage(u); } catch (e) {} } };
   await Promise.all(Array.from({ length: parallel }, worker));
 }

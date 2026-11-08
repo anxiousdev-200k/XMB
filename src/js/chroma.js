@@ -54,13 +54,22 @@ function mediaEl(src, path) {
   return img;
 }
 
+function clearLayer(el) {
+  if (el._chroma) { el._chroma.stop(); el._chroma = null; }
+  for (const video of el.querySelectorAll("video")) {
+    try { video.pause(); video.removeAttribute("src"); video.load(); } catch (e) {}
+  }
+  el.replaceChildren();
+  el._src = null; el._chromaSrc = null;
+  el.classList.remove("ready");
+}
+
 // Fill `el` with the media at `path` (src = its loadable URL). Returns true if shown.
 export function setLayerMedia(el, src, path) {
   if (!el) return false;
   // already showing this picture / video: leave it (no reload or flicker)
   if (src && el._src === src && !el._chroma && el.firstChild) { el.classList.add("show"); return true; }
-  if (el._chroma) { el._chroma.stop(); el._chroma = null; }
-  el.innerHTML = ""; el._src = null; el._chromaSrc = null; el.classList.remove("ready");
+  clearLayer(el);
   if (!src) { el.classList.remove("show"); return false; }
   el.appendChild(mediaEl(src, path));
   el._src = src;
@@ -75,10 +84,9 @@ export function setOverlayMedia(el, src, path, strength = 0.5, key = "green") {
   // same video already keyed: just update the strength / key colour
   if (el._chroma && el._chromaSrc === src) { el._chroma.strength = strength; el._chroma.setKey(key); return true; }
   if (!src || !isVideoPath(path)) return setLayerMedia(el, src, path);   // images (or nothing)
-  if (el._chroma) { el._chroma.stop(); el._chroma = null; }
-  el.innerHTML = ""; el._src = null;
+  clearLayer(el);
   const k = new ChromaKeyVideo(src);
-  if (!k.ok) { return setLayerMedia(el, src, path); }   // no WebGL: plain video
+  if (!k.ok) { k.stop(); return setLayerMedia(el, src, path); }   // no WebGL: plain video
   k.strength = strength; k.setKey(key);
   el.appendChild(k.canvas);
   el._chroma = k; el._chromaSrc = src;
@@ -152,6 +160,16 @@ class ChromaKeyVideo {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.running = true;
     this.video.play().catch(() => {});
+    const schedule = () => {
+      if (!this.running) return;
+      if (this.video.requestVideoFrameCallback) {
+        this._frameKind = "video";
+        this._frameId = this.video.requestVideoFrameCallback(draw);
+      } else {
+        this._frameKind = "animation";
+        this._frameId = requestAnimationFrame(draw);
+      }
+    };
     const draw = () => {
       if (!this.running) return;
       const v = this.video;
@@ -172,9 +190,9 @@ class ChromaKeyVideo {
           if (e && e.name === "SecurityError" && !this._blobTried) this._toBlob(src);
         }
       }
-      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(draw); else requestAnimationFrame(draw);
+      schedule();
     };
-    if (this.video.requestVideoFrameCallback) this.video.requestVideoFrameCallback(draw); else requestAnimationFrame(draw);
+    schedule();
   }
   setKey(key) {
     const k = String(key || "green").toLowerCase();
@@ -195,7 +213,12 @@ class ChromaKeyVideo {
   }
   stop() {
     this.running = false;
-    if (this._blobUrl) URL.revokeObjectURL(this._blobUrl);
+    if (this._frameKind === "video" && this._frameId != null) this.video.cancelVideoFrameCallback?.(this._frameId);
+    else if (this._frameId != null) cancelAnimationFrame(this._frameId);
+    this._frameId = null;
+    if (this._blobUrl) { URL.revokeObjectURL(this._blobUrl); this._blobUrl = null; }
     try { this.video.pause(); this.video.removeAttribute("src"); this.video.load(); } catch (e) {}
+    try { this.gl?.getExtension("WEBGL_lose_context")?.loseContext(); } catch (e) {}
+    this.gl = null;
   }
 }

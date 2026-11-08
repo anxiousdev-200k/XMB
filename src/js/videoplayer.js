@@ -69,6 +69,8 @@ export class VideoPlayer {
     this.el = document.getElementById("mediaview");
     this.volLevel = 5;
     this.picker = new ListPicker(sfx);
+    this._subBlobUrl = null;
+    this._subApplyRun = 0;
     this._onResize = () => this._applyScreen();
   }
 
@@ -90,12 +92,15 @@ export class VideoPlayer {
   }
 
   close() {
+    if (this._closed) return;
     this._closed = true;
     this._normalSpeed(false);
     clearTimeout(this._statusT); clearTimeout(this._boxT); clearTimeout(this._iarT); clearInterval(this._scrubT);
     clearInterval(this._rateT); clearTimeout(this._lingerT);
     window.removeEventListener("resize", this._onResize);
     if (this._subs) this._closeSubs(false);
+    this._subApplyRun++;
+    this._removeSubtitleTracks();
     try { this.video.pause(); this.video.removeAttribute("src"); this.video.load(); } catch (e) {}
     try { if (this._actx) this._actx.close(); } catch (e) {}
     this._actx = null; this._srcNode = null;
@@ -104,6 +109,14 @@ export class VideoPlayer {
     document.body.classList.remove("menu-open", "video-open");
     this.sfx.resumeBg();
     this.onClose && this.onClose();
+    this.items = [];
+    this.resolve = null;
+    this.onClose = null;
+    this.opts = {};
+    this.video = null;
+    this.$ = null;
+    this._nodes = [];
+    this.nav = null;
   }
 
   get item() { return this.items[this.idx] || {}; }
@@ -530,6 +543,8 @@ export class VideoPlayer {
     if (this._thumbBusy) return;
     this._thumbBusy = true;
     const it = this.item;
+    const run = this._thumbRun;
+    const live = () => !this._closed && run === this._thumbRun && this.item === it;
     try {
       if (!this._tv) {
         const tv = document.createElement("video");
@@ -539,14 +554,16 @@ export class VideoPlayer {
       }
       const tv = this._tv;
       if (tv.readyState < 1) await new Promise((r) => { tv.addEventListener("loadedmetadata", r, { once: true }); setTimeout(r, 4000); });
-      while (this._thumbQ && this._thumbQ.length && !this._closed && this.item === it) {
+      while (this._thumbQ && this._thumbQ.length && live()) {
         const t = this._thumbQ.shift();
         if (this._thumbs.has(t)) continue;
         await new Promise((r) => {
           let done = false; const fin = () => { if (!done) { done = true; tv.removeEventListener("seeked", fin); r(); } };
           tv.addEventListener("seeked", fin); tv.currentTime = Math.min(t + 0.05, (tv.duration || t + 1) - 0.05); setTimeout(fin, 3000);
         });
+        if (!live()) break;
         if (tv.readyState < 2) await new Promise((r) => { tv.addEventListener("loadeddata", r, { once: true }); setTimeout(r, 1500); });
+        if (!live()) break;
         let url = "";
         try {
           const c = document.createElement("canvas"); c.width = 320; c.height = 180;
@@ -557,9 +574,13 @@ export class VideoPlayer {
         const box = this.$.layer.querySelector(`.vp-thumb[data-t="${t}"]`);
         if (box && !box.firstChild) box.innerHTML = `<img src="${url}" alt="">`;
       }
-    } finally { this._thumbBusy = false; }
+    } finally {
+      this._thumbBusy = false;
+      if (!this._closed && this._thumbQ?.length) queueMicrotask(() => this._thumbWork());
+    }
   }
   _resetThumbs() {
+    this._thumbRun = (this._thumbRun || 0) + 1;
     this._thumbs = new Map(); this._thumbQ = [];
     if (this._tv) { try { this._tv.removeAttribute("src"); this._tv.load(); } catch (e) {} this._tv = null; }
   }
@@ -657,9 +678,21 @@ export class VideoPlayer {
   _subsInput(a) {
     this.picker.onInput(a);
   }
+  _removeSubtitleTracks() {
+    const urls = new Set(this._subBlobUrl ? [this._subBlobUrl] : []);
+    for (const track of this.video?.querySelectorAll("track") || []) {
+      if (track.src.startsWith("blob:")) urls.add(track.src);
+      track.track && (track.track.mode = "disabled");
+      track.removeAttribute("src");
+      track.remove();
+    }
+    this._subBlobUrl = null;
+    for (const url of urls) URL.revokeObjectURL(url);
+  }
   async _applySub(src) {
     const v = this.video;
-    [...v.querySelectorAll("track")].forEach((t) => t.remove());
+    const run = ++this._subApplyRun;
+    this._removeSubtitleTracks();
     for (const tt of v.textTracks || []) tt.mode = "disabled";
     if (this.$.subs) this.$.subs.innerHTML = "";
     this._subActive = src.key;
@@ -671,11 +704,16 @@ export class VideoPlayer {
         const url = this.opts.subResolve ? this.opts.subResolve(src.path) : src.path;
         text = await (await fetch(url)).text();
       }
-    } catch (e) { this._showBox("subtitle_options", "Subtitles unavailable"); return; }
+    } catch (e) {
+      if (this._closed || run !== this._subApplyRun) return;
+      this._showBox("subtitle_options", "Subtitles unavailable"); return;
+    }
+    if (this._closed || run !== this._subApplyRun) return;
     if (!/^WEBVTT/.test(text)) text = "WEBVTT\n\n" + text.replace(/\r+/g, "").replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
     const tr = document.createElement("track");
     tr.kind = "subtitles"; tr.default = true;
-    tr.src = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
+    this._subBlobUrl = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
+    tr.src = this._subBlobUrl;
     v.appendChild(tr);
     // the cues are drawn by the player itself (not the video's own captions,
     // which Windows can give a black box): no background, the font in use and

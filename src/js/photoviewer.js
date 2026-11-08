@@ -18,7 +18,7 @@ import { playerIcon } from "./themes.js";
 import { call, Input, noExt } from "./api.js";
 import { appPixelScale } from "./fit.js";
 import { readExif, exifRows, exifDate } from "./exif.js";
-import { isDocPath, openDoc } from "./docs.js";
+import { isDocPath, openDoc, retainDoc, releaseDoc } from "./docs.js";
 import { PadNav, PHOTO_LINKS, SLIDESHOW_LINKS, nodeX } from "./padnav.js";
 
 const PV = "./assets/icons/pv/";
@@ -110,13 +110,13 @@ export class PhotoViewer {
     this.menuOn = false; this.fr = 0; this.fc = 0; this.popup = null; this.info = 0;
     this.dmode = 0; this.effect = 0; this.rot = 0; this.rots = new Map();
     this.slide = null; this.crop = null; this.dlg = null; this._closed = false; this._ssSeen = false;
-    this.page = 0; this.doc = null;
+    this.page = 0; this.doc = null; this._docUrl = null; this._docPromise = null;
     document.body.classList.add("menu-open", "pv-open");
     this.el.classList.add("show");
     this._build();
     window.addEventListener("resize", this._onResize);
     this._lastStick = performance.now();
-    requestAnimationFrame(this._loop);
+    this._raf = requestAnimationFrame(this._loop);
     this._load(0);
     if (opts.slideshow || opts.playlist) this._startSlideshow();
   }
@@ -124,20 +124,39 @@ export class PhotoViewer {
     if (this._closed) return;
     this._closed = true;
     clearTimeout(this._slideT); clearTimeout(this._boxT); clearTimeout(this._hudT); clearTimeout(this._ssT); clearTimeout(this._ssIconT);
+    clearTimeout(this._aheadT);
+    this._aheadRun = (this._aheadRun || 0) + 1;
     window.removeEventListener("resize", this._onResize);
+    if (this._raf != null) cancelAnimationFrame(this._raf);
+    this._raf = null;
+    for (const a of this._anims || []) { try { a.cancel(); } catch (e) {} }
+    this._anims?.clear();
+    this._held = [];
     const rots = [...this.rots.entries()];
+    this.rots.clear();
+    const closingItems = this.items;
+    const resolve = this.resolve, opts = this.opts;
     this.el.classList.remove("show"); this.el.innerHTML = "";
+    if (this._docUrl) releaseDoc(this._docUrl);
+    this._docUrl = null; this._docPromise = null; this.doc = null;
     document.body.classList.remove("menu-open", "pv-open");
     this.onClose && this.onClose();
+    this.img = null; this.$ = null; this._url = null;
     // rotated pictures are saved rotated when the viewer closes
     for (const [it, deg] of rots) {
       const d = ((deg % 360) + 360) % 360;
       if (!d || isDocPath(it.path) || NO_REWRITE.test(it.path || "")) continue;
       try {
-        const url = await this._rendered(this.resolve(it), d, /\.png$/i.test(it.path) ? "image/png" : "image/jpeg");
+        const url = await this._rendered(resolve(it), d, /\.png$/i.test(it.path) ? "image/png" : "image/jpeg");
         await call("photo_write", { path: it.path, dataUrl: url });
-        this.opts.onSaved && this.opts.onSaved(it.path, true);
+        opts.onSaved && opts.onSaved(it.path, true);
       } catch (e) {}
+    }
+    if (this.items === closingItems) {
+      this.items = [];
+      this.resolve = null;
+      this.onClose = null;
+      this.opts = {};
     }
   }
   get item() { return this.items[this.idx] || {}; }
@@ -194,13 +213,22 @@ export class PhotoViewer {
     this.rot = this.rots.get(it) || 0;
     this.dmode = 0; this.doc = null;
     let url = this.resolve(it);
-    if (isDocPath(it.path)) {
+    const docUrl = isDocPath(it.path) ? url : null;
+    if (docUrl !== this._docUrl) {
+      if (this._docUrl) releaseDoc(this._docUrl);
+      this._docUrl = docUrl;
+      this._docPromise = docUrl ? retainDoc(docUrl, it.path) : null;
+    }
+    if (docUrl) {
       try {
-        this.doc = await openDoc(url, it.path);
+        this.doc = await this._docPromise;
         if (this._closed || this.item !== it) return;
         this.page = dir < 0 ? this.doc.count - 1 : 0;
         url = await this.doc.page(this.page);
-      } catch (e) { this._box("display", "This file can't be opened.", 3000); return; }
+      } catch (e) {
+        if (this._closed || this.item !== it) return;
+        this._box("display", "This file can't be opened.", 3000); return;
+      }
       if (this._closed || this.item !== it) return;
     } else this.page = 0;
     this._show(url, dir);
@@ -232,14 +260,15 @@ export class PhotoViewer {
   // What comes next is made ready while this one shows, so turning a page
   // or going to the next picture is instant: a document's next two pages and
   // the one before (drawn one at a time), or the next and previous pictures
-  // (loaded and decoded). Pages already made are kept for the session.
+  // (loaded and decoded). Pages already made stay in the bounded cache.
   _ahead() {
+    clearTimeout(this._aheadT);
     const run = this._aheadRun = (this._aheadRun || 0) + 1;
     const live = () => !this._closed && this._aheadRun === run;
     const decode = (u) => { if (!u) return Promise.resolve(); const im = new Image(); if (!/^(data|blob):/.test(u)) im.crossOrigin = "anonymous"; im.src = u;
       (this._held ||= []).push(im); if (this._held.length > 8) this._held.shift();   // (kept a while, so they stay decoded)
       return im.decode().catch(() => {}); };
-    setTimeout(async () => {
+    this._aheadT = setTimeout(async () => {
       if (!live()) return;
       const doc = this.doc;
       if (doc) {
@@ -517,7 +546,7 @@ export class PhotoViewer {
   }
   _loop(now) {
     if (this._closed) return;
-    requestAnimationFrame(this._loop);
+    this._raf = requestAnimationFrame(this._loop);
     const dt = Math.min(50, now - (this._lastT || now)); this._lastT = now;
     if (this.dlg || (this.popup && this.menuOn) || this.slide || !this.img) return;
     // held D-pad / keys / panel button: after a short delay keep moving

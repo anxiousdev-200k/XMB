@@ -9,7 +9,7 @@ import { MONTH_COLORS } from "./wave.js";
 import { ThemeBackground } from "./p3tbg.js";
 import { setLayerMedia, setOverlayMedia, isVideoPath } from "./chroma.js";
 import { fitMedia, FIT_MODES } from "./fit.js";
-import { shadeIcon, cachedShade, shadeSrc, loadIconImage, loadedIcon, importShades, exportShades, takeNewShadeCount, colorKey, pruneShades } from "./iconshade.js";
+import { shadeIcon, cachedShade, shadeSrc, loadIconImage, loadedIcon, importShades, exportShades, takeNewShadeCount, colorKey, pruneShades, dropThemeShades, dropIconImage } from "./iconshade.js";
 import { REAL_WAVE_DEFAULTS, REAL_PARTICLE_DEFAULTS, COMPLEX_EXTRA_DEFAULTS, COMPLEX_GRADIENT_PRESETS } from "./wavegl.js";
 import { Keybinds, ACTIONS as KEY_ACTIONS, keyLabel, codeToVk } from "./keybinds.js";
 import { VideoPlayer } from "./videoplayer.js";
@@ -2397,6 +2397,7 @@ Are you sure you want to continue?`,
   // save the shading a few seconds after new images were made (the colours in
   // use most recently are kept: up to 3)
   _xsScheduleSave(rk) {
+    if (!this.user) return;
     const used = this._xsColors || (this._xsColors = []);
     const i = used.indexOf(rk);
     if (i >= 0) used.splice(i, 1);
@@ -2404,11 +2405,49 @@ Are you sure you want to continue?`,
     used.length = Math.min(used.length, 3);
     clearTimeout(this._xsSaveT);
     this._xsSaveT = setTimeout(() => {
+      if (!this.user) return;
       // (memory keeps the same colours as the saved file: the 3 used last, the current one among them)
       pruneShades([...this._xsColors, colorKey(this._iconRgb()), colorKey([1, 1, 1])]);   // (a theme's own-coloured icons use white)
       if (!takeNewShadeCount()) return;
       call("icon_shades_save", { data: JSON.stringify(exportShades(this._xsColors)) }).catch(() => {});
     }, 3000);
+  }
+  _scheduleThemeCachePrune() {
+    clearTimeout(this._themeCachePruneT);
+    this._themeCachePruneT = setTimeout(() => {
+      const liveThemes = new Set(activeThemes().map((layer) => layer.key));
+      const liveIcons = new Set(activeThemes().flatMap((layer) => Object.values(layer.icons || {})));
+      const liveBases = new Set();
+      let dropped = 0;
+      const solid = this._solidBlobs;
+      if (solid) {
+        for (const [src, url] of solid) {
+          if (liveIcons.has(url)) liveBases.add(src);
+          else {
+            solid.delete(src);
+            dropIconImage(url);
+            URL.revokeObjectURL(url);
+            dropped++;
+          }
+        }
+      }
+      const themes = this._themeBlobs;
+      if (themes) {
+        for (const [path, url] of themes) {
+          if (liveIcons.has(url) || liveBases.has(url)) continue;
+          themes.delete(path);
+          dropIconImage(url);
+          URL.revokeObjectURL(url);
+          dropped++;
+        }
+      }
+      const shadeCount = this.user ? dropThemeShades(liveThemes) : 0;
+      if (!dropped && !shadeCount) return;
+      takeNewShadeCount();
+      if (this.user && this._xsColors) {
+        call("icon_shades_save", { data: JSON.stringify(exportShades(this._xsColors)) }).catch(() => {});
+      }
+    }, 10000);
   }
   _applyXmbwShading() {
     const on = document.documentElement.getAttribute("data-icons") === "xmbw";
@@ -4669,6 +4708,7 @@ Are you sure you want to continue?`,
     };
     const [p, ic, cu] = await Promise.all([pick("p3t"), pick("icon"), pick("custom")]);
     setActiveThemes(p, ic, cu);
+    this._scheduleThemeCachePrune();
     for (const l of [p, ic, cu]) this._preshadeTheme(l);
     // the PS3 theme's own parts that are on
     const on = (part) => (p && p.opts[part] ? p.theme : null);

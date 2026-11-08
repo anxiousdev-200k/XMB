@@ -710,6 +710,10 @@ fn music_cover(path: String) -> Option<String> {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    if quitkey::held_from_elsewhere() {
+        log::line("INFO", "system", "Ignoring Close System input held outside the app");
+        return;
+    }
     cursorlock::release_now();
     browser::on_app_exit(&app);
     maybe_cleanup_temp(&app);
@@ -1021,7 +1025,12 @@ pub fn run() {
             }
             // Closing the window (the X button) also triggers temp-file cleanup
             // when "Delete Temporary Files" is on.
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if quitkey::held_from_elsewhere() {
+                    api.prevent_close();
+                    log::line("INFO", "system", "Ignoring close request from a key held outside the app");
+                    return;
+                }
                 cursorlock::release_now();
                 browser::on_app_exit(&window.app_handle());
                 maybe_cleanup_temp(&window.app_handle());
