@@ -61,6 +61,11 @@ const gameName = (g) => { const t = noExt(g.title); return g.copy > 1 ? `${t} ($
 const winPath = (p) => String(p == null ? "" : p).replace(/\//g, "\\").replace(/\\{2,}/g, (m, o) => o === 0 ? m : "\\");
 // the system's own columns after Users, in their order
 const BASE_COLUMNS = ["settings", "photo", "music", "video", "tvvideo", "game", "network", "psn", "friends"];
+const LAZY_MEDIA_COLUMNS = {
+  photo: { label: "Photo", icon: "tex_photo.png" },
+  music: { label: "Music", icon: "icon_music.png" },
+  video: { label: "Video", icon: "icon_video.png" },
+};
 const isHomeGame = (g) => /^(playstation|playstation3|ps|ps3)home$/.test(String(g && (g.title || g.folder) || "").toLowerCase().replace(/[^a-z0-9]/g, ""));
 // game.json "console" values (Game Settings) and their "By Format" folder names
 // Console (game.json "console"): [key, format name (By Format folders), badge]
@@ -367,6 +372,7 @@ export class Xmb {
     this.gameConfirm = new GameConfirm(audio);
     this.quickMenu = new GameQuickMenu(audio, {
       onResume: () => this._resumeTrackedGame(),
+      onQuit: () => this._quitTrackedGame(),
       onShutdown: () => this._turnOff(),
     });
     this.userInfo = new UserInfo(audio);
@@ -452,7 +458,7 @@ export class Xmb {
     setPlayerIconTint({ r: 255, g: 255, b: 255, a: 1 });   // (the filter must exist before any player opens)
   }
 
-  async start(manifest, { noAutoLogin = false, recoverGame = null } = {}) {
+  async start(manifest, { noAutoLogin = false, recoverGame = null, onReadyForIntro = null } = {}) {
     this.manifest = manifest;
     this.locked = true; this.user = null;
     await this._buildColumns();
@@ -469,7 +475,7 @@ export class Xmb {
       || (noAutoLogin ? null : users.find((u) => u.autoLogin));
     if (auto) {
       this.show();
-      await this._signIn(auto);
+      await this._signIn(auto, { onReady: onReadyForIntro });
       if (recoverGame?.active) await this.restoreGameSession(recoverGame);
       this._applyPerformance();
       setTimeout(() => this._applyResolution(), 400);
@@ -494,15 +500,26 @@ export class Xmb {
   async _buildColumns({ reuseGames = false } = {}) {
     this.mediaMode ||= { music: "all", photo: "all", video: "all" };
     this._loadDetected();
-    const users = await this._buildColumn("users");
-    if (this.locked) { this.columns = [users]; return; }
-    const games = reuseGames && this._lastGames ? this._lastGames : await call("scan_library");
+    const usersPromise = this._buildColumn("users");
+    if (this.locked) { this.columns = [await usersPromise]; return; }
+    const gamesPromise = reuseGames && this._lastGames ? Promise.resolve(this._lastGames) : call("scan_library");
+    const [users, games, psnAccounts] = await Promise.all([
+      usersPromise,
+      gamesPromise,
+      call("list_psn_accounts"),
+    ]);
     this._lastGames = games;
-    this.psnAccounts = await call("list_psn_accounts");
-    // the libraries' fingerprints as their lists are read now (see _liveRefresh)
-    await this._takeMediaFingerprints(["photo", "video", "music"]);
-    const cols = [users];
-    for (const id of BASE_COLUMNS) cols.push(await this._buildColumn(id, games));
+    this.psnAccounts = psnAccounts;
+    const eagerIds = BASE_COLUMNS.filter((id) => !LAZY_MEDIA_COLUMNS[id]);
+    const built = await Promise.all(eagerIds.map((id) => this._buildColumn(id, games)));
+    const builtById = new Map(built.filter(Boolean).map((column) => [column.id, column]));
+    const priorById = new Map((this.columns || []).map((column) => [column.id, column]));
+    const cols = [users, ...BASE_COLUMNS.map((id) => {
+      if (!LAZY_MEDIA_COLUMNS[id]) return builtById.get(id);
+      const previous = priorById.get(id);
+      if (previous && !previous._lazy) return previous;
+      return { id, ...LAZY_MEDIA_COLUMNS[id], items: [], _lazy: true };
+    }).filter(Boolean)];
     // (custom sections from System Settings > Sections go where they were placed)
     this.columns = await this._withSections(cols);
   }
@@ -561,6 +578,38 @@ export class Xmb {
       case "friends": return { id: "friends", label: "Friends", icon: "icon_friend.png", items: await this._friendsItems() };
     }
     return null;
+  }
+  _loadLazyColumn(col) {
+    if (col._loadingPromise) return col._loadingPromise;
+    if (!col._lazy) return Promise.resolve();
+    col._lazy = false;
+    col._loading = true;
+    col.items = [{ kind: "empty", title: "Loading...", icon: { sys: "loading_icon.png" } }];
+    col._loadingPromise = this._buildColumn(col.id, this._lastGames).then((fresh) => {
+      if (!fresh || !this.columns.includes(col)) return;
+      Object.assign(col, fresh);
+      if (this.columns[this.selCat] === col) {
+        const sel = Math.max(0, Math.min(this._colSel?.[col.id] || 0, col.items.length - 1));
+        this.levels = [{ items: col.items, sel }];
+        this._renderItems(this.root.clientWidth, this.root.clientHeight);
+        this._onSelect();
+        this._liveRefresh(col.id);
+      }
+    }).catch((error) => {
+      console.error(`Loading the ${col.label} section failed`, error);
+      col._lazy = true;
+      col.items = [{ kind: "empty", title: "Couldn't load this section", sub: "Move away and return to try again.",
+        icon: { sys: "loading_icon.png" } }];
+      if (this.columns[this.selCat] === col) {
+        this.levels = [{ items: col.items, sel: 0 }];
+        this._renderItems(this.root.clientWidth, this.root.clientHeight);
+        this._onSelect();
+      }
+    }).finally(() => {
+      col._loading = false;
+      col._loadingPromise = null;
+    });
+    return col._loadingPromise;
   }
   // Put a column built again in place of the old one (same position); the
   // menu shown from it is pointed at the new items by the caller
@@ -748,6 +797,8 @@ export class Xmb {
       ],
       "Accessory Settings": [
         { kind: "setting", ctl: "vkb", title: "On-Screen Keyboard", icon: SI },
+        { kind: "action", act: "calibrate_gamepad_takeover", title: "Controller Return Buttons", icon: SI,
+          sub: "Calibrate Select and Start for returning from games. Map Guide to F13 in your controller software to use it as the Guide-button fallback." },
       ],
       "Date and Time Settings": [
         { kind: "setting", ctl: "dateformat", title: "Date Format", icon: SI,
@@ -1118,21 +1169,23 @@ export class Xmb {
       }
     }
   }
-  // New files / games in the source folders (or put in the app's folders by
-  // hand) show up when their column is opened, without a restart.
+  // Media folders are checked when their column is opened. Game discovery is
+  // deliberately separate and only runs from the manual Game Recognition action.
   _liveRefresh(id) {
     if (String(id).startsWith("sec:")) { this._liveRefreshSection(id); return; }
-    if (!["game", "music", "photo", "video"].includes(id) || this._inGame) return;
+    if (!["music", "photo", "video"].includes(id) || this._inGame) return;
+    const column = this.columns[this.selCat];
+    if (column?._lazy || column?._loading) return;
     const now = Date.now(); this._liveAt ||= {};
     if (now - (this._liveAt[id] || 0) < 8000) return;
     this._liveAt[id] = now;
     setTimeout(async () => {
       if (this.columns[this.selCat]?.id !== id) return;
-      if (id === "game") { this._refreshGameColumn().then(() => this._scrapeWaiting()); return; }
       // the whole list is read and built again only when the library's
       // fingerprint changed (files added, removed, renamed or changed): with a
       // big library that's a lot of work (and memory to clean up afterwards)
       let fp = null; try { fp = await call("media_fingerprint", { kind: id }); } catch (e) {}
+      if (fp && !Object.hasOwn(this._mediaFp || {}, id)) { (this._mediaFp ||= {})[id] = fp; return; }
       if (fp && fp === (this._mediaFp || {})[id]) return;
       if (this.columns[this.selCat]?.id !== id) return;
       this._refreshMediaColumns(id);
@@ -1273,8 +1326,7 @@ export class Xmb {
     if (this._preloadState === "loading") return undefined;
     this._preloadState = "loading"; this._preloadAct = act; this._preloadTitle = title;
     this._preloadDone = 0; this._preloadTotal = 0;
-    // not started from an option on screen (new games found when the Game
-    // column opened): the same loading icon, counter and warning in a box
+    // Jobs without a matching option on screen use the loading box.
     const lvl = this._level();
     const onItem = !!(lvl && lvl.items.some((x) => x.act === act));
     if (!onItem) this._lockBox(true);
@@ -1576,12 +1628,12 @@ export class Xmb {
     const base = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || p;
     return [
       { kind: "action", act: "gsrc_add", title: "Add Source Folder", icon: SI },
+      { kind: "action", act: "gsrc_scan", title: "Scan for New Games", icon: SI,
+        sub: "Manually checks configured source folders and updates PS3 game details. New games are not searched for automatically." },
       { kind: "drill", title: "Recognized Games", icon: SI, childrenFn: this._detectedGameItems,
         sub: "Games found on your chosen game folders. Choose one to delete it from the system's content\\Games directory (The actual game doesn't get deleted)." },
       { kind: "drill", title: "Game Databases", icon: SI, childrenFn: this._scrapeItems,
         sub: "Enter the keys to automatically access the game art in SteamGridDB, TheGamesDB or RAWG." },
-      ...(srcs.length ? [{ kind: "action", act: "gsrc_scan", title: "Game Recognition", icon: SI,
-        sub: "Looks for new games in the source folders now. New games are also found every time you open the Game column." }] : []),
       ...srcs.map((p, i) => ({ kind: "action", act: `gsrc_remove::${i}`, title: base(p), icon: { sys: "icon_game.png" },
         sub: `${winPath(p)}\nPress \u2715 to remove this source folder. The games found in it are removed from the Games folder (the games themselves aren't touched).` })),
     ];
@@ -1668,7 +1720,6 @@ export class Xmb {
     this._rebuildLevel(this._gameRecognitionItems);
     const lvl = this._level(); const i = lvl.items.findIndex((x) => x.act === "gsrc_scan");
     if (i >= 0) { lvl.sel = i; this._render(); this._onSelect(); }
-    this._gsrcScan(false);
   }
   _gsrcRemove(i) {
     const list = this.settings.gameSources || [];
@@ -1692,21 +1743,38 @@ export class Xmb {
   async _gsrcScan(quiet) {
     if (this._scanning) return;
     this._scanning = true;
-    let n = 0;
+    let n = 0, scanError = null;
     // the games are recognized, then (Automatic Scraping) their art is fetched,
     // the menu waiting on both
     const run = async (retitle) => {
-      const made = await call("game_sources_sync").catch(() => 0);
+      let made;
+      try { made = await call("game_sources_sync"); }
+      catch (error) { scanError = error; return 0; }
       let w = 0; try { w = await call("game_scrape_waiting"); } catch (e) {}
       if (w && retitle) { retitle("Getting game art online..."); await call("game_scrape_queued").catch(() => 0); }
       return made;
     };
-    try { n = (quiet ? await run(null) : await this._runLocked("gsrc_scan", "Recognizing games...", run)) || 0; } catch (e) {}
-    this._scanning = false;
-    await this._loadDetected();
-    await this._refreshGameColumn();
-    if (!quiet || n) this._shotFeedback(n ? `${n} new game${n === 1 ? "" : "s"} added` : "No new games found");
-    if (quiet) this._scrapeWaiting();
+    try {
+      const result = quiet ? await run(null) : await this._runLocked("gsrc_scan", "Recognizing games...", run);
+      if (result == null) return;
+      n = result || 0;
+      await this._loadDetected();
+      await this._refreshGameColumn();
+      if (scanError) {
+        console.error("Game recognition failed", scanError);
+        this.audio.play("error", 0.5);
+        this._shotFeedback("Game scan failed");
+      } else {
+        if (!quiet || n) this._shotFeedback(n ? `${n} new game${n === 1 ? "" : "s"} added` : "No new games found");
+        if (quiet) this._scrapeWaiting();
+      }
+    } catch (error) {
+      console.error("Could not complete game recognition", error);
+      this.audio.play("error", 0.5);
+      this._shotFeedback("Game scan failed");
+    } finally {
+      this._scanning = false;
+    }
   }
   _gsrcDelete(folder) {
     const g = (this._detected || []).find((x) => x.folder === folder);
@@ -2292,7 +2360,7 @@ Are you sure you want to continue?`,
     // by an anchor icon on the left (with a back arrow) built in _renderItems.
     this.$crumb.classList.remove("show");
     this._updateMediaSort();
-    this._renderItems(w, h);
+    this._renderItems(w, h, true);
     this._applyXmbwShading();
   }
 
@@ -2582,8 +2650,14 @@ Are you sure you want to continue?`,
     if (n.startsWith("cust:")) return n.slice(n.indexOf(":", 5) + 1);
     return sysUrl(n);
   }
-  _renderItems(w, h) {
-    this.$items.innerHTML = "";
+  // Reuse cached item nodes on category changes so their CSS transitions move
+  // rows between sections instead of flashing newly-created elements.
+  _renderItems(w, h, reuseItems = false) {
+    if (reuseItems) {
+      this.$items.querySelectorAll(".item-anchor, .item-ghost").forEach((el) => el.remove());
+    } else {
+      this.$items.replaceChildren();
+    }
     { const f = this._secFlat(); this.$items.classList.toggle("has-flat", !!f); if (f) this.$items.style.setProperty("--sec-flat", `url('${f}')`); else this.$items.style.removeProperty("--sec-flat"); }
     const active = this.levels.length - 1;
     this.levels.forEach((lvl, li) => {
@@ -2592,7 +2666,7 @@ Are you sure you want to continue?`,
         // only the rows around the selection exist (see _ensureWindow): a
         // library of thousands of songs builds ~30 rows, and only their
         // covers load
-        for (const it of lvl.items) it._el = null;
+        if (!reuseItems) for (const it of lvl.items) it._el = null;
         this._ensureWindow(lvl);
       } else {
         // ancestor anchor: the item that was drilled into, with the back arrow
@@ -2635,6 +2709,8 @@ Are you sure you want to continue?`,
       // a little slack before dropping a row, so moving back and forth doesn't rebuild it
       const keep = j >= a - 4 && j <= b + 4;
       if (it._el && !keep) { it._el.remove(); it._el = null; }
+      // Reattach a cached row when returning to the column that owns it.
+      else if (it._el && inside && it._el.parentElement !== this.$items) this.$items.appendChild(it._el);
       else if (!it._el && inside) { this._makeItemEl(lvl, it, j); made = true; }
     });
     if (lvl.inFolder && this._dynCovers(lvl)) this._coverSwap(lvl);
@@ -2689,11 +2765,21 @@ Are you sure you want to continue?`,
     watchArtLoading(el, this._secFlat()); watchArtRatio(el);
     // left click: the item is chosen and opened (as ✕ does); right click: its △ menu (main.js)
     el.addEventListener("click", () => {
-      if (this.overlay || this._level() !== lvl) return;
-      if (lvl.sel !== j) { lvl.sel = j; this._layoutItems(this.root.clientWidth, this.root.clientHeight); this._onSelect(); }
+      const activeLevel = this._level();
+      if (this.overlay || !activeLevel) return;
+      const index = activeLevel.items.indexOf(it);
+      if (index < 0) return;
+      if (activeLevel.sel !== index) { activeLevel.sel = index; this._layoutItems(this.root.clientWidth, this.root.clientHeight); this._onSelect(); }
       this.onInput("enter");
     });
-    el._xmbPick = () => { if (lvl.sel !== j && this._level() === lvl) { lvl.sel = j; this._layoutItems(this.root.clientWidth, this.root.clientHeight); this._onSelect(); } };
+    el._xmbPick = () => {
+      const activeLevel = this._level();
+      if (!activeLevel) return;
+      const index = activeLevel.items.indexOf(it);
+      if (index >= 0 && activeLevel.sel !== index) {
+        activeLevel.sel = index; this._layoutItems(this.root.clientWidth, this.root.clientHeight); this._onSelect();
+      }
+    };
     this.$items.appendChild(el); it._el = el; it._labelDirty = false;
     // placed without sliding in from the corner: transitions start next frame
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove("fresh")));
@@ -3040,7 +3126,12 @@ Are you sure you want to continue?`,
     if (!this._colSel) this._colSel = {};
     if (this.levels.length === 1) this._colSel[this.columns[this.selCat].id] = this.levels[0].sel;
     this.selCat = i;
-    const col = this.columns[i], items = col.items;
+    const col = this.columns[i];
+    if (col._lazy || col._loading) {
+      col.items = [{ kind: "empty", title: "Loading...", icon: { sys: "loading_icon.png" } }];
+      this._loadLazyColumn(col);
+    }
+    const items = col.items;
     let sel = this._colSel[col.id];
     if (sel == null && col.id === "users" && this.user) {
       sel = items.findIndex((it) => it.act === "quit");
@@ -3337,17 +3428,9 @@ Are you sure you want to continue?`,
         this.levels = [{ items: this.columns[gameIndex].items, sel: Math.max(0, quitIndex) }];
         this._render();
         this._onSelect();
-        try {
-          await this._refreshGameColumn();
-          const refreshedQuitIndex = this.columns[gameIndex].items.findIndex((it) => it.act === "quit_running_game");
-          this.levels = [{ items: this.columns[gameIndex].items, sel: Math.max(0, refreshedQuitIndex) }];
-          this._colSel.game = this.levels[0].sel;
-          this._render();
-          this._onSelect();
-        } catch (e) {
-          console.error("Could not refresh the game list after returning from a game", e);
-          this.audio.play("error", 0.5);
-        }
+        // The current library snapshot is still valid; recent-played ordering
+        // was updated at launch. Do not block the return/quick-menu path on a
+        // full library scan while the game is still running.
       }
     }
     if (openQuickMenu && !this.quickMenu.el.classList.contains("show")) this.quickMenu.open();
@@ -3417,15 +3500,24 @@ Are you sure you want to continue?`,
     this.audio.enabled = this.user?.soundEnabled !== false;
     this.audio.musicEnabled = this.user?.musicEnabled !== false;
     this.audio.leaveGame();
-    this._refreshGameColumn().then(() => {
-      if (this.columns[this.selCat]?.id === "game") {
-        this.levels = this._gameFocusLevels(this.columns[this.selCat].items);
-        this._colSel ||= {};
-        this._colSel.game = this.levels[0].sel;
-      }
-      this._render(); this._onSelect();
-    })
-      .catch((e) => console.error("Refreshing games after session ended failed", e));
+    const gameColumn = this.columns?.find((column) => column.id === "game");
+    const quitIndex = gameColumn?.items.findIndex((item) => item.act === "quit_running_game") ?? -1;
+    if (quitIndex >= 0) {
+      const [quitItem] = gameColumn.items.splice(quitIndex, 1);
+      quitItem._el?.remove();
+      quitItem._el = null;
+    }
+    if (this.columns[this.selCat] === gameColumn) {
+      this.levels = this._gameFocusLevels(gameColumn.items);
+      this._colSel ||= {};
+      this._colSel.game = this.levels[0].sel;
+      if (this.$items) this._renderItems(this.root.clientWidth, this.root.clientHeight, true);
+      else this._render();
+      this._onSelect();
+    } else if (gameColumn && gameColumn.sel >= gameColumn.items.length) {
+      gameColumn.sel = Math.max(0, gameColumn.items.length - 1);
+    }
+    this._preloadLazyColumns();
   }
   _saveGameSession(returned, clear = false) {
     try {
@@ -3503,9 +3595,41 @@ Are you sure you want to continue?`,
       },
       () => { this.confirm.close(); this.overlay = null; });
   }
+  _calibrateGamepadTakeover() {
+    if (this._inGame) return;
+    const showMessage = (message) => {
+      this.overlay = this.confirm;
+      this.confirm.open(message, [{ label: "OK", id: "ok" }],
+        () => { this.confirm.close(); this.overlay = null; },
+        () => { this.confirm.close(); this.overlay = null; });
+    };
+    const capture = (button) => {
+      const name = button === "select" ? "SELECT" : "START";
+      this.overlay = this.confirm;
+      this.confirm.open(
+        `Press Listen, then press ${name} once by itself within 20 seconds. Keep other buttons released.`,
+        [{ label: "Listen", id: "listen" }, { label: "Cancel", id: "cancel" }],
+        async (choice) => {
+          this.confirm.close(); this.overlay = null;
+          if (choice?.id !== "listen") return;
+          try {
+            await call("calibrate_gamepad_button", { button });
+            if (button === "select") {
+              capture("start");
+              return;
+            }
+            showMessage("Controller return buttons saved. Map the controller's Guide button to F13 in its remapping software to use Guide as the return-to-XMB shortcut.");
+          } catch (error) {
+            showMessage(`Controller calibration failed: ${String(error)}`);
+          }
+        },
+        () => { this.confirm.close(); this.overlay = null; });
+    };
+    capture("select");
+  }
 
   // ------------------------------------------------------------- users
-  async _signIn(user) {
+  async _signIn(user, { onReady = null } = {}) {
     if (this._signingIn) return;
     this.audio.play("enter", 0.6);
     // Show a loading screen (Turn-Off-System style) while this profile's
@@ -3514,9 +3638,9 @@ Are you sure you want to continue?`,
     // the menu doesn't move meanwhile.
     this._signingIn = true;
     const showT = setTimeout(() => this._loadingBegin(), 60);
-    try { await this._signInSteps(user, showT); } finally { this._signingIn = false; }
+    try { await this._signInSteps(user, showT, onReady); } finally { this._signingIn = false; }
   }
-  async _signInSteps(user, showT) {
+  async _signInSteps(user, showT, onReady = null) {
     const list = await call("list_users");
     const fresh = (list.users || []).find((u) => u.id === user.id) || user;
     call("set_active_user", { id: fresh.id });
@@ -3543,6 +3667,7 @@ Are you sure you want to continue?`,
     await this._applyThemes(false, true);
     this._applyWallpaper();
     this._restartRotation();
+    if (onReady) onReady();
     await this._buildColumns();
     clearTimeout(showT);
     await this._loadingSettle();
@@ -3553,6 +3678,33 @@ Are you sure you want to continue?`,
       : [{ items: this.columns[this.selCat].items, sel: 0 }];
     this._render(); this._onSelect();
     this._loadingDone();
+    this._preloadLazyColumns();
+  }
+  _preloadLazyColumns() {
+    if (this._lazyColumnsPreloading) return;
+    this._lazyColumnsPreloading = true;
+    const idle = () => new Promise((resolve) => {
+      if (window.requestIdleCallback) window.requestIdleCallback(() => resolve(), { timeout: 500 });
+      else setTimeout(resolve, 60);
+    });
+    const preload = async () => {
+      try {
+        for (const id of ["video", "music", "photo"]) {
+          if (this._inGame || !this.columns) return;
+          const col = this.columns.find((item) => item.id === id);
+          if (!col || (!col._lazy && !col._loading)) continue;
+          await idle();
+          if (this._inGame || !this.columns) return;
+          if (!this.columns.includes(col) || (!col._lazy && !col._loading)) continue;
+          await this._loadLazyColumn(col);
+        }
+      } catch (error) {
+        console.error("Preloading media sections failed", error);
+      } finally {
+        this._lazyColumnsPreloading = false;
+      }
+    };
+    setTimeout(preload, 0);
   }
   _newUser() {
     // XMB-style: only ask for a name; the profile gets the default white user icon.
@@ -5518,6 +5670,7 @@ Are you sure you want to continue?`,
       case "theme_bgimage": return this._themeBgImage();
       case "bgpl_new": return this._bgPlaylistNew();
       case "keybinds": return this._openKeybinds();
+      case "calibrate_gamepad_takeover": return this._calibrateGamepadTakeover();
       case "theme_overlay": return this._themeOverlay();
       case "theme_overlayremove": return this._themeOverlayRemove();
       case "theme_bgremove": return this._themeBgRemove();

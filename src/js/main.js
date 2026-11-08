@@ -14,8 +14,16 @@ import { startMarquees } from "./marquee.js";
 import { startGlyphs } from "./glyphs.js";
 import { preloadAppIcons } from "./iconshade.js";
 
-const manifest = await (await fetch("./assets/manifest.json")).json();
-await loadPsnAvatars(); // enumerate drop-in PSN avatars before the XMB uses them
+const [manifest, , settings, appInfo, gameSession] = await Promise.all([
+  fetch("./assets/manifest.json").then((response) => response.json()),
+  loadPsnAvatars(), // enumerate drop-in PSN avatars before the XMB uses them
+  call("get_settings"),
+  call("app_info"),
+  call("game_session_state").catch((e) => {
+    console.error("Could not recover the native game session state", e);
+    return null;
+  }),
+]);
 const audio = new AudioManager(manifest);
 const wave = new WaveBackground(document.getElementById("wave"));
 // The intro and the log-in / user-select screen (before any profile's own theme
@@ -23,13 +31,6 @@ const wave = new WaveBackground(document.getElementById("wave"));
 // user gets.
 wave.resetWaveParams();
 const infobox = new InfoBox(document.getElementById("infobox"));
-
-const settings = await call("get_settings");
-const appInfo = await call("app_info");
-const gameSession = await call("game_session_state").catch((e) => {
-  console.error("Could not recover the native game session state", e);
-  return null;
-});
 
 // apply system-wide volumes + brightness + time format from saved settings at boot
 audio.setMasterVolume((settings.behavior?.volume ?? 100) / 100);
@@ -74,15 +75,28 @@ const xmb = new Xmb(audio, wave, {
 xmb.setContext(settings, appInfo);
 listen("game-home", () => {
   gp.gameQuickCombo = false;
-  return xmb.returnToXmbFromGame(false);
+  call("log_write", { level: "info", msg: "Webview received game-home." }).catch((e) => console.error("Could not log game-home", e));
+  return xmb.returnToXmbFromGame(false).then(() => {
+    call("log_write", { level: "info", msg: "Webview completed game-home handling." }).catch((e) => console.error("Could not log game-home completion", e));
+  }).catch((e) => {
+    call("log_write", { level: "error", msg: `Webview game-home handling failed: ${e}` }).catch((logError) => console.error("Could not log game-home failure", logError));
+    console.error("Could not handle game-home", e);
+  });
 });
 listen("game-quick-menu", () => {
   gp.gameQuickCombo = false;
-  return xmb.returnToXmbFromGame(true);
+  call("log_write", { level: "info", msg: "Webview received game-quick-menu." }).catch((e) => console.error("Could not log quick-menu event", e));
+  return xmb.returnToXmbFromGame(true).then(() => {
+    call("log_write", { level: "info", msg: "Webview completed game-quick-menu handling." }).catch((e) => console.error("Could not log quick-menu completion", e));
+  }).catch((e) => {
+    call("log_write", { level: "error", msg: `Webview quick-menu handling failed: ${e}` }).catch((logError) => console.error("Could not log quick-menu failure", logError));
+    console.error("Could not handle game-quick-menu", e);
+  });
 });
 listen("game-exited", () => {
   gp.gameQuickCombo = false;
   xmb._finishGameSession();
+  call("log_write", { level: "info", msg: "Webview handled game-exited." }).catch((e) => console.error("Could not log game-exited", e));
 });
 listen("game-sleeping", () => xmb.prepareForSleep());
 listen("game-sleep-failed", () => xmb.restoreAfterSleepFailure());
@@ -107,6 +121,7 @@ const _bgAudioSync = () => {
 document.addEventListener("visibilitychange", _bgAudioSync);
 window.addEventListener("blur", () => { if (!audio.playInBackground) audio.suspendForBackground(); xmb.setLowPower(1); });
 window.addEventListener("focus", () => { audio.resumeFromBackground(); xmb.setLowPower(0);
+  if (xmb._inGame) call("log_write", { level: "info", msg: "Webview received focus while game session is active." }).catch((e) => console.error("Could not log game-session focus", e));
   // (back in the System after adding files in Windows: a custom section on
   // screen is read again, so they show at once)
   const c = xmb.columns && xmb.columns[xmb.selCat];
@@ -114,7 +129,10 @@ window.addEventListener("focus", () => { audio.resumeFromBackground(); xmb.setLo
 // (the backend brings the app back when a controller button is pressed while
 // the page has lost the focus; see focus.rs)
 window.addEventListener("focus", () => call("page_focus", { focused: true }).catch(() => {}));
-window.addEventListener("blur", () => call("page_focus", { focused: false }).catch(() => {}));
+window.addEventListener("blur", () => {
+  if (xmb._inGame) call("log_write", { level: "info", msg: "Webview lost focus while game session is active." }).catch((e) => console.error("Could not log game-session blur", e));
+  call("page_focus", { focused: false }).catch(() => {});
+});
 document.addEventListener("visibilitychange", () => xmb.setLowPower(document.hidden ? 1 : 0));
 // art found online for newly recognized games (in the background): the Game
 // column shows it once the downloads settle
@@ -556,7 +574,7 @@ async function boot() {
   const introOn = !loggedOut && !recoveringGame && settings.behavior?.bootAnimation !== false;
   // Console Startup Sound (System Settings, On by default) loads alongside
   // the first menu instead of adding a fixed sound-only wait.
-  let su = null, startupReady = true, introStarted = false, introFinished = false, startupTimer = 0;
+  let su = null, startupReady = true, introStarted = false, introFinished = false, startupTimer = 0, introPromise = null;
   const fadeStartupSound = (handle) => {
     const bs = settings.behavior?.bootSound || "coldboot";
     audio.ready(bs).then(() => {
@@ -583,25 +601,29 @@ async function boot() {
     }, 2500);
   }
   // Build the first menu while icons and audio load. The configured intro
-  // still plays over the completed menu.
+  // starts after the user's theme is ready, while the game library is scanned.
   document.body.classList.add("intro-hold");
   audio.hold = true;
+  const startIntro = () => {
+    introStarted = true;
+    if (su) su.half();
+    introPromise = playIntro(audio, {
+      enabled: introOn,
+      bootSound: settings.behavior?.bootSound || "coldboot",
+      icon: settings.behavior?.introIcon ? assetUrl(settings.behavior.introIcon) : null,
+      title: settings.behavior?.introTitle ? assetUrl(settings.behavior.introTitle) : null,
+      onSound: (sec) => su && su.fadeOutIn(sec, 3),
+      // skipped: the startup sound lowers quickly to nothing (to 15 % with the
+      // Buffering Sound on, and carries on as its loop)
+      onSkip: () => su && su.fadeOutIn(0.6, 0.6),
+    });
+  };
   try {
-    await xmb.start(manifest, { noAutoLogin: loggedOut, recoverGame: gameSession });
+    await xmb.start(manifest, { noAutoLogin: loggedOut, recoverGame: gameSession, onReadyForIntro: startIntro });
   } catch (e) { console.error(e); }
   endBootClock();
-  introStarted = true;
-  if (su) su.half();
-  await playIntro(audio, {
-    enabled: introOn,
-    bootSound: settings.behavior?.bootSound || "coldboot",
-    icon: settings.behavior?.introIcon ? assetUrl(settings.behavior.introIcon) : null,
-    title: settings.behavior?.introTitle ? assetUrl(settings.behavior.introTitle) : null,
-    onSound: (sec) => su && su.fadeOutIn(sec, 3),
-    // skipped: the startup sound lowers quickly to nothing (to 15 % with the
-    // Buffering Sound on, and carries on as its loop)
-    onSkip: () => su && su.fadeOutIn(0.6, 0.6),
-  });
+  if (!introPromise) startIntro();
+  await introPromise;
   introFinished = true;
   // intro off: the startup sound ends just as it would have with the intro
   // (at the end of where the intro's sound would be, fading over 3 s; or on at

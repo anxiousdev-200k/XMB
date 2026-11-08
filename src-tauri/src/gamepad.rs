@@ -17,11 +17,64 @@
 pub struct PadState {
     pub buttons: u32,
     pub guide: bool,
+    pub source: u8,
+    pub raw_buttons: u32,
     /// sticks in -1..1, +x right, +y DOWN (screen direction)
     pub lx: f32,
     pub ly: f32,
     pub rx: f32,
     pub ry: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct PadSourceState {
+    pub label: String,
+    pub state: PadState,
+}
+
+pub const SOURCE_HID: u8 = 1 << 0;
+pub const SOURCE_XINPUT: u8 = 1 << 1;
+pub const SOURCE_WINMM: u8 = 1 << 2;
+
+fn merge_states(states: impl IntoIterator<Item = PadState>) -> Option<PadState> {
+    let mut merged: Option<PadState> = None;
+    for state in states {
+        merged = Some(match merged {
+            None => state,
+            Some(mut current) => {
+                current.buttons |= state.buttons;
+                current.guide |= state.guide;
+                current.source |= state.source;
+                current.raw_buttons |= state.raw_buttons;
+                let current_motion = current.lx.abs() + current.ly.abs() + current.rx.abs() + current.ry.abs();
+                let state_motion = state.lx.abs() + state.ly.abs() + state.rx.abs() + state.ry.abs();
+                if state_motion > current_motion {
+                    current.lx = state.lx;
+                    current.ly = state.ly;
+                    current.rx = state.rx;
+                    current.ry = state.ry;
+                }
+                current
+            }
+        });
+    }
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merges_buttons_and_guide_from_multiple_devices() {
+        let merged = merge_states([
+            PadState { buttons: B_CROSS, source: SOURCE_HID, ..Default::default() },
+            PadState { buttons: B_SELECT | B_START, guide: true, source: SOURCE_XINPUT, ..Default::default() },
+        ]).unwrap();
+        assert_eq!(merged.buttons, B_CROSS | B_SELECT | B_START);
+        assert!(merged.guide);
+        assert_eq!(merged.source, SOURCE_HID | SOURCE_XINPUT);
+    }
 }
 
 pub const B_CROSS: u32 = 1 << 0;
@@ -50,6 +103,7 @@ pub struct Reader;
 impl Reader {
     pub fn new() -> Self { Reader }
     pub fn poll(&mut self) -> Option<PadState> { None }
+    pub fn poll_sources(&mut self) -> Vec<PadSourceState> { Vec::new() }
 }
 
 #[cfg(windows)]
@@ -124,10 +178,16 @@ mod imp {
 
     struct Joy { id: u32, sony: bool, caps: JOYCAPSW }
 
+    impl Joy {
+        fn label(&self) -> String {
+            let end = self.caps.szPname.iter().position(|&c| c == 0).unwrap_or(self.caps.szPname.len());
+            let name = String::from_utf16_lossy(&self.caps.szPname[..end]);
+            format!("WinMM device {} ({name}, {} buttons)", self.id, self.caps.wNumButtons)
+        }
+    }
+
     pub struct Reader {
         xinput: Option<XInput>,
-        xslot: Option<u32>,
-        next_xscan: Instant,
         joy: Option<Joy>,
         next_jscan: Instant,
     }
@@ -142,7 +202,7 @@ mod imp {
     impl Reader {
         pub fn new() -> Self {
             let now = Instant::now();
-            Reader { xinput: load_xinput(), xslot: None, next_xscan: now, joy: None, next_jscan: now }
+            Reader { xinput: load_xinput(), joy: None, next_jscan: now }
         }
 
         fn read_x(&mut self, slot: u32) -> Option<PadState> {
@@ -160,7 +220,8 @@ mod imp {
             for (m, bit) in map { if w & m != 0 { b |= bit; } }
             if g.bLeftTrigger > 60 { b |= B_L2; }
             if g.bRightTrigger > 60 { b |= B_R2; }
-            Some(PadState { buttons: b, guide: w & 0x0400 != 0, lx: thumb(g.sThumbLX), ly: -thumb(g.sThumbLY),
+            Some(PadState { buttons: b, guide: w & 0x0400 != 0, source: SOURCE_XINPUT, lx: thumb(g.sThumbLX), ly: -thumb(g.sThumbLY),
+                            raw_buttons: w,
                             rx: thumb(g.sThumbRX), ry: -thumb(g.sThumbRY) })
         }
 
@@ -199,39 +260,51 @@ mod imp {
                 if (13500..=22500).contains(&p) { b |= B_DOWN; }
                 if (22500..=31500).contains(&p) { b |= B_LEFT; }
             }
-            Some(PadState { buttons: b, guide: false,
+            Some(PadState { buttons: b, guide: false, source: SOURCE_WINMM, raw_buttons: i.dwButtons,
                 lx: norm(i.dwXpos, c.wXmin, c.wXmax), ly: norm(i.dwYpos, c.wYmin, c.wYmax),
                 rx: norm(i.dwZpos, c.wZmin, c.wZmax), ry: norm(i.dwRpos, c.wRmin, c.wRmax) })
         }
 
         /// Current state of the first connected controller (None = no pad).
-        pub fn poll(&mut self) -> Option<PadState> {
+        pub fn poll_sources(&mut self) -> Vec<PadSourceState> {
             let now = Instant::now();
-            // a PlayStation controller read natively over HID (hidpad.rs)
-            if let Some(st) = crate::hidpad::latest_pad() { return Some(st); }
-            // XInput first (a pad seen by XInput is also listed by WinMM)
+            let mut states = Vec::with_capacity(6);
+            // Merge rather than prefer one device: a physical HID pad can be
+            // idle while a virtual XInput controller is the one being used.
+            if let Some(mut state) = crate::hidpad::latest_pad() {
+                state.source = SOURCE_HID;
+                states.push(PadSourceState { label: "HID".into(), state });
+            }
             if self.xinput.is_some() {
-                if let Some(s) = self.xslot {
-                    if let Some(st) = self.read_x(s) { return Some(st); }
-                    self.xslot = None;
-                }
-                if now >= self.next_xscan {
-                    self.next_xscan = now + Duration::from_millis(1000);
-                    for s in 0..4 {
-                        if let Some(st) = self.read_x(s) { self.xslot = Some(s); return Some(st); }
+                for slot in 0..4 {
+                    if let Some(state) = self.read_x(slot) {
+                        states.push(PadSourceState { label: format!("XInput slot {slot}"), state });
                     }
                 }
             }
             if self.joy.is_some() {
-                if let Some(st) = self.read_joy() { return Some(st); }
-                self.joy = None;
+                if let Some(state) = self.read_joy() {
+                    if let Some(joy) = self.joy.as_ref() {
+                        states.push(PadSourceState { label: joy.label(), state });
+                    }
+                } else {
+                    self.joy = None;
+                }
             }
             if now >= self.next_jscan {
                 self.next_jscan = now + Duration::from_millis(1500);
                 self.scan_joy();
-                return self.read_joy();
+                if let Some(state) = self.read_joy() {
+                    if let Some(joy) = self.joy.as_ref() {
+                        states.push(PadSourceState { label: joy.label(), state });
+                    }
+                }
             }
-            None
+            states
+        }
+
+        pub fn poll(&mut self) -> Option<PadState> {
+            merge_states(self.poll_sources().into_iter().map(|sample| sample.state))
         }
     }
 }

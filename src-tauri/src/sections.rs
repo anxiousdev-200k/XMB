@@ -199,6 +199,33 @@ pub fn safe_name(s: &str) -> String {
     if t.is_empty() { "Section".into() } else { t }
 }
 
+const RESERVED_FOLDERS: &[&str] = &[
+    "Games", "Music", "Photos", "Videos", "Subtitles", "Themes", "Fonts", "Browser",
+    "data", "Avatars", "Icon", "Sound Effects", "Themes Extracted", "Logs",
+];
+
+pub fn folder_path(root: &Path, section: &str, sub: Option<&str>) -> Result<PathBuf, String> {
+    let section = safe_name(section);
+    if RESERVED_FOLDERS.iter().any(|name| name.eq_ignore_ascii_case(&section)) {
+        return Err("not a section folder".into());
+    }
+    let root_real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let section_path = root.join(&section);
+    if section_path.exists() {
+        let real = section_path.canonicalize().map_err(|e| e.to_string())?;
+        if !real.starts_with(&root_real) { return Err("not a section folder".into()); }
+    }
+    let path = match sub.filter(|s| !s.trim().is_empty()) {
+        Some(sub) => section_path.join(safe_name(sub)),
+        None => section_path,
+    };
+    if path.exists() {
+        let real = path.canonicalize().map_err(|e| e.to_string())?;
+        if !real.starts_with(&root_real) { return Err("not a section folder".into()); }
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +310,28 @@ mod tests {
             assert!(!t.contains("isDisc") && t.contains("\"PC\""), "{t}");
         }
         assert!(v.iter().all(|e| e.game.as_ref().map(|g| g.console == "PC").unwrap_or(false)));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn section_paths_reject_reserved_folders_without_case_sensitivity() {
+        let root = std::env::temp_dir().join(format!("xmb_section_reserved_{}", std::process::id()));
+        fs::create_dir_all(root.join("Games")).unwrap();
+        fs::write(root.join("Games").join("important.game"), b"keep").unwrap();
+        for section in ["Games", "games", "GAMES", "data", "Browser"] {
+            assert!(folder_path(&root, section, None).is_err());
+            assert!(folder_path(&root, section, Some("Subsection")).is_err());
+        }
+        assert_eq!(fs::read(root.join("Games").join("important.game")).unwrap(), b"keep");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn section_paths_keep_normal_sections_inside_content() {
+        let root = std::env::temp_dir().join(format!("xmb_section_path_{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(folder_path(&root, "My Section", Some("Subsection")).unwrap(),
+            root.join("My Section").join("Subsection"));
         let _ = fs::remove_dir_all(&root);
     }
 }

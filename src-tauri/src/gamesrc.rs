@@ -335,6 +335,7 @@ const GAME_INNER_DIRS: &[&str] = &[
 /// game (an exe in it, or the inside of a game such as "Binaries" / "Data"
 /// next to the game's own files), otherwise each of its subfolders.
 fn game_dirs(source: &Path) -> Vec<PathBuf> {
+    if is_maxmb_install(source) { return vec![]; }
     let Ok(rd) = fs::read_dir(source) else { return vec![] };
     let entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
     let lname = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -348,10 +349,17 @@ fn game_dirs(source: &Path) -> Vec<PathBuf> {
     let dirs: Vec<PathBuf> = entries.into_iter()
         .filter(|p| p.is_dir())
         .filter(|p| !SKIP_DIRS.contains(&lname(p).as_str()))
+        .filter(|p| !is_maxmb_install(p))
         .collect();
     // only a game's inner folders here (Binaries, Content…): it's one game
     if !dirs.is_empty() && dirs.iter().all(|p| GAME_INNER_DIRS.contains(&lname(p).as_str())) { return vec![source.to_path_buf()]; }
     dirs
+}
+
+fn is_maxmb_install(dir: &Path) -> bool {
+    let has_executable = fs::read_dir(dir).into_iter().flatten().flatten()
+        .any(|entry| entry.file_name().to_string_lossy().eq_ignore_ascii_case("ps3xmb.exe"));
+    has_executable && dir.join("content").join("data").join("settings.json").is_file()
 }
 
 const GENERIC_NAMES: &[&str] = &[
@@ -419,8 +427,9 @@ pub fn sync(sources: &[String], games_dir: &Path, record_file: &Path, ffmpeg: Op
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut rec = load_record(record_file);
+    let mut added = recover_stale_portable_entries(games_dir, &mut rec);
+    remove_maxmb_entries(games_dir, &mut rec);
     repair(games_dir, &mut rec);
-    let mut added = Vec::new();
     // each game folder once (a source inside another source finds it twice)
     let mut seen = std::collections::HashSet::new();
     let all: Vec<(String, PathBuf)> = sources.iter().filter(|s| Path::new(s).is_dir())
@@ -513,6 +522,102 @@ pub fn sync(sources: &[String], games_dir: &Path, record_file: &Path, ffmpeg: Op
     progress(total, total);
     save_record(record_file, &rec);
     added
+}
+
+fn stale_portable_target(folder: &Path, games_dir: &Path) -> Option<PathBuf> {
+    let install_root = games_dir.parent()?.parent()?;
+    let relative = folder.strip_prefix(install_root).ok()?;
+    let mut components = relative.components();
+    if !components.next()?.as_os_str().to_string_lossy().eq_ignore_ascii_case("content") {
+        return None;
+    }
+    let mut content_levels = 1;
+    while components.as_path().components().next()
+        .map(|component| component.as_os_str().to_string_lossy().eq_ignore_ascii_case("content"))
+        .unwrap_or(false)
+    {
+        components.next();
+        content_levels += 1;
+    }
+    if content_levels < 2
+        || !components.next()?.as_os_str().to_string_lossy().eq_ignore_ascii_case("Games")
+    {
+        return None;
+    }
+    let remaining: Vec<_> = components.collect();
+    if remaining.is_empty() || remaining.iter().any(|component| !matches!(component, std::path::Component::Normal(_))) {
+        return None;
+    }
+    Some(games_dir.join(remaining.iter().fold(PathBuf::new(), |mut path, component| {
+        path.push(component.as_os_str());
+        path
+    })))
+}
+
+fn recover_stale_portable_entries(games_dir: &Path, record: &mut Record) -> Vec<PathBuf> {
+    let mut restored = Vec::new();
+    for entry in &mut record.entries {
+        let stale_folder = PathBuf::from(&entry.folder);
+        let Some(target) = stale_portable_target(&stale_folder, games_dir) else { continue };
+        if !Path::new(&entry.exe).is_file() { continue; }
+
+        if !target.exists() {
+            if stale_folder.is_dir() {
+                if let Err(error) = fs::create_dir_all(target.parent().unwrap_or(games_dir))
+                    .and_then(|_| fs::rename(&stale_folder, &target))
+                {
+                    crate::warn_log!("Could not restore game folder {}: {error}", target.display());
+                    continue;
+                }
+            } else {
+                if let Err(error) = fs::create_dir_all(&target) {
+                    crate::warn_log!("Could not recreate game folder {}: {error}", target.display());
+                    continue;
+                }
+                let title = if entry.title.trim().is_empty() {
+                    target.file_name().unwrap_or_default().to_string_lossy().to_string()
+                } else {
+                    entry.title.clone()
+                };
+                let metadata = serde_json::json!({
+                    "title": title,
+                    "launch": &entry.exe,
+                    "console": "PC",
+                    "sourceDir": &entry.source
+                });
+                if let Err(error) = fs::write(
+                    target.join("game.json"),
+                    serde_json::to_string_pretty(&metadata).unwrap_or_default(),
+                ) {
+                    crate::warn_log!("Could not restore game metadata in {}: {error}", target.display());
+                    continue;
+                }
+                if let Some(icon) = icon_png(Path::new(&entry.exe), 0) {
+                    let _ = fs::write(target.join("icon.png"), icon);
+                }
+            }
+            restored.push(target.clone());
+        }
+        entry.folder = target.display().to_string();
+    }
+    restored
+}
+
+fn remove_maxmb_entries(games_dir: &Path, record: &mut Record) {
+    let games_root = games_dir.canonicalize().ok();
+    record.entries.retain(|entry| {
+        let exe = Path::new(&entry.exe);
+        let is_app = exe.file_name().map(|name| name.eq_ignore_ascii_case("ps3xmb.exe")).unwrap_or(false)
+            && exe.parent().map(is_maxmb_install).unwrap_or(false);
+        if !is_app { return true; }
+
+        if let (Some(root), Ok(folder)) = (&games_root, Path::new(&entry.folder).canonicalize()) {
+            if folder != *root && folder.starts_with(root) {
+                let _ = fs::remove_dir_all(folder);
+            }
+        }
+        false
+    });
 }
 
 /// A folder in content\Games for a PS3 game: its name, RPCS3 to start it,
@@ -870,6 +975,133 @@ mod tests {
         fs::create_dir_all(lib.join("A")).unwrap(); fs::create_dir_all(lib.join("B")).unwrap();
         assert_eq!(game_dirs(&lib).len(), 2);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn portable_app_folder_is_not_detected_as_a_game() {
+        let dir = std::env::temp_dir().join(format!("xmb_gamesrc_portable_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("content").join("data")).unwrap();
+        fs::write(dir.join("ps3xmb.exe"), b"x").unwrap();
+        fs::write(dir.join("content").join("data").join("settings.json"), b"{}").unwrap();
+
+        assert!(game_dirs(&dir).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn source_folder_skips_nested_portable_app_but_keeps_games() {
+        let source = std::env::temp_dir().join(format!("xmb_gamesrc_source_{}", std::process::id()));
+        let app = source.join("MaXMB");
+        let game = source.join("Cool Game");
+        let _ = fs::remove_dir_all(&source);
+        fs::create_dir_all(app.join("content").join("data")).unwrap();
+        fs::write(app.join("ps3xmb.exe"), b"x").unwrap();
+        fs::write(app.join("content").join("data").join("settings.json"), b"{}").unwrap();
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join("game.exe"), b"x").unwrap();
+
+        assert_eq!(game_dirs(&source), vec![game.clone()]);
+        let _ = fs::remove_dir_all(&source);
+    }
+
+    #[test]
+    fn sync_removes_old_portable_app_game_entry() {
+        let root = std::env::temp_dir().join(format!("xmb_gamesrc_cleanup_{}", std::process::id()));
+        let app = root.join("MaXMB");
+        let games = root.join("content").join("Games");
+        let generated = games.join("MaXMB");
+        let record_file = root.join("game_sources.json");
+        let exe = app.join("ps3xmb.exe");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(app.join("content").join("data")).unwrap();
+        fs::create_dir_all(&generated).unwrap();
+        fs::write(&exe, b"x").unwrap();
+        fs::write(app.join("content").join("data").join("settings.json"), b"{}").unwrap();
+        fs::write(generated.join("game.json"), b"{\"title\":\"MaXMB\"}").unwrap();
+        save_record(&record_file, &Record {
+            entries: vec![Entry {
+                exe: exe.display().to_string(),
+                folder: generated.display().to_string(),
+                title: "MaXMB".into(),
+                source: app.display().to_string(),
+            }],
+            ..Record::default()
+        });
+
+        assert!(sync(&[], &games, &record_file, None, &|_, _| {}).is_empty());
+        assert!(load_record(&record_file).entries.is_empty());
+        assert!(!generated.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sync_restores_game_entries_from_stale_nested_portable_paths() {
+        let root = std::env::temp_dir().join(format!("xmb_gamesrc_stale_paths_{}", std::process::id()));
+        let games = root.join("content").join("Games");
+        let exe = root.join("External Game").join("game.exe");
+        let stale = root.join("content").join("content").join("content").join("Games").join("External Game");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        fs::write(&exe, b"game").unwrap();
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("custom-art.txt"), b"keep").unwrap();
+        let mut record = Record {
+            entries: vec![Entry {
+                exe: exe.display().to_string(),
+                folder: stale.display().to_string(),
+                title: "External Game".into(),
+                source: exe.parent().unwrap().display().to_string(),
+            }],
+            rpcs3: String::new(),
+        };
+
+        let restored = recover_stale_portable_entries(&games, &mut record);
+        assert_eq!(restored, vec![games.join("External Game")]);
+        assert_eq!(fs::read(games.join("External Game").join("custom-art.txt")).unwrap(), b"keep");
+        assert!(!stale.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sync_recreates_missing_entries_from_stale_nested_paths() {
+        let root = std::env::temp_dir().join(format!("xmb_gamesrc_stale_missing_{}", std::process::id()));
+        let games = root.join("content").join("Games");
+        let exe = root.join("External Game").join("game.exe");
+        let stale = root.join("content").join("content").join("Games").join("External Game");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        fs::write(&exe, b"game").unwrap();
+        let mut record = Record {
+            entries: vec![Entry {
+                exe: exe.display().to_string(),
+                folder: stale.display().to_string(),
+                title: "External Game".into(),
+                source: exe.parent().unwrap().display().to_string(),
+            }],
+            rpcs3: String::new(),
+        };
+
+        let restored = recover_stale_portable_entries(&games, &mut record);
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &fs::read(games.join("External Game").join("game.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(restored, vec![games.join("External Game")]);
+        assert_eq!(metadata["title"], "External Game");
+        assert_eq!(metadata["launch"], exe.display().to_string());
+        assert_eq!(record.entries[0].folder, games.join("External Game").display().to_string());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ordinary_game_folder_with_executable_is_still_detected() {
+        let dir = std::env::temp_dir().join(format!("xmb_gamesrc_regular_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("game.exe"), b"x").unwrap();
+
+        assert_eq!(game_dirs(&dir), vec![dir.clone()]);
+        let _ = fs::remove_dir_all(&dir);
     }
     #[test]
     fn url_file_icon() {

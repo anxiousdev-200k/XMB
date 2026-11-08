@@ -87,16 +87,9 @@ fn list_psn_avatars(app: AppHandle) -> serde_json::Value {
 #[tauri::command(async)]
 fn scan_library(app: AppHandle) -> Vec<Game> {
     let s = current_settings(&app);
-    // games in the source folders: new ones get their folder first, so a game
-    // added while the app runs shows when the Game column is next opened
-    if !s.game_sources.is_empty() && sync_due("games") {
-        let made = gamesrc::sync(&s.game_sources, &paths::games_dir(&app), &paths::game_sources_file(&app), audio::ffmpeg_path(&app).as_deref(), &|_, _| {});
-        queue_scrape(&app, made);
-    }
-    // PS3 games put into the Games folder by hand: their media and RPCS3
-    if sync_due("ps3") {
-        gamesrc::fill_ps3_folders(&paths::games_dir(&app), &paths::game_sources_file(&app), audio::ffmpeg_path(&app).as_deref());
-    }
+    // Listing the current library must stay cheap and never search configured
+    // source folders. Discovery and PS3 metadata updates run from the explicit
+    // Game Recognition action instead.
     library::scan(&s.library_paths, Some(&paths::shortcut_icons_dir(&app)))
 }
 
@@ -127,11 +120,14 @@ fn game_delete(app: AppHandle, folder: String) -> Result<(), String> {
     std::fs::remove_dir_all(&p).map_err(|e| e.to_string())
 }
 
-/// Find games in the source folders now; returns how many were added.
+/// Manually recognize source games and refresh PS3 game metadata. Returns how
+/// many games were added from source folders.
 #[tauri::command(async)]
 fn game_sources_sync(app: AppHandle) -> usize {
     let s = current_settings(&app);
-    let made = gamesrc::sync(&s.game_sources, &paths::games_dir(&app), &paths::game_sources_file(&app), audio::ffmpeg_path(&app).as_deref(), &progress_fn(&app, "games"));
+    let ffmpeg = audio::ffmpeg_path(&app);
+    let made = gamesrc::sync(&s.game_sources, &paths::games_dir(&app), &paths::game_sources_file(&app), ffmpeg.as_deref(), &progress_fn(&app, "games"));
+    gamesrc::fill_ps3_folders(&paths::games_dir(&app), &paths::game_sources_file(&app), ffmpeg.as_deref());
     let n = made.len();
     // (with Automatic Scraping on, every recognized game the databases haven't
     // been asked about yet gets its art too, not only the new ones: a key
@@ -270,9 +266,10 @@ fn content_writable(app: AppHandle) -> serde_json::Value {
 /// Create (if needed) content/<section> or content/<section>/<sub> and return it.
 #[tauri::command(async)]
 fn section_folder(app: AppHandle, section: String, sub: Option<String>) -> Result<String, String> {
-    let mut p = paths::content_root(&app).join(sections::safe_name(&section));
-    if let Some(s) = sub.filter(|s| !s.trim().is_empty()) { p = p.join(sections::safe_name(&s)); }
+    let root = paths::content_root(&app);
+    let p = sections::folder_path(&root, &section, sub.as_deref())?;
     std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+    sections::folder_path(&root, &section, sub.as_deref())?;
     Ok(p.display().to_string())
 }
 
@@ -281,11 +278,7 @@ fn section_folder(app: AppHandle, section: String, sub: Option<String>) -> Resul
 #[tauri::command(async)]
 fn section_delete_folder(app: AppHandle, section: String, sub: Option<String>) -> Result<bool, String> {
     let root = paths::content_root(&app);
-    let mut p = root.join(sections::safe_name(&section));
-    if let Some(s) = sub.filter(|s| !s.trim().is_empty()) { p = p.join(sections::safe_name(&s)); }
-    // never anything outside the content folder, nor one of the system's own folders
-    let reserved = ["Games", "Music", "Photos", "Videos", "Subtitles", "Themes", "Fonts", "Browser", "data"];
-    if p == root || !p.starts_with(&root) || reserved.iter().any(|r| p == root.join(r)) { return Err("not a section folder".into()); }
+    let p = sections::folder_path(&root, &section, sub.as_deref())?;
     if !p.exists() { return Ok(false); }
     std::fs::remove_dir_all(&p).map_err(|e| e.to_string())?;
     Ok(true)
@@ -963,6 +956,10 @@ pub fn run() {
         .setup(|app| {
             // the log (content\Logs\MaXMB.log), first of all
             log::init(app.handle());
+            if let Err(error) = paths::relocate_portable_data(app.handle()) {
+                warn_log!("Could not relocate portable data paths: {error}");
+            }
+            focus::load_controller_bindings(app.handle());
             // small picture copies: where they're kept, and the ones of pictures
             // that are gone (or changed) deleted, in the background
             // (the temporary caches live in Windows' Temp folder now: an older
@@ -1048,6 +1045,7 @@ pub fn run() {
             game_sources_remove,
             pick_folder,
             launch_game, game_mode_end, focus::page_focus, pick_file, image_has_alpha, game_media_set, game_scrape, game_scrape_waiting, game_scrape_queued,
+            focus::calibrate_gamepad_button,
             resume_game, game_session_state, quit_running_game, adjust_system_volume, open_sound_settings, switch_output_device, sleep_system,
             list_users,
             create_user,

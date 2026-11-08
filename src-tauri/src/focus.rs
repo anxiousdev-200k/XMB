@@ -19,6 +19,38 @@ use tauri::{AppHandle, Manager};
 #[cfg(windows)]
 use tauri::Emitter;
 
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct ControllerBindings {
+    select: Option<CapturedButton>,
+    start: Option<CapturedButton>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CapturedButton {
+    source: String,
+    mask: u32,
+}
+
+fn button_pressed(
+    binding: &Option<CapturedButton>,
+    source: &str,
+    raw_buttons: u32,
+    buttons: u32,
+    fallback: u32,
+) -> bool {
+    match binding {
+        Some(binding) if binding.source == source => raw_buttons & binding.mask != 0,
+        _ => buttons & fallback != 0,
+    }
+}
+
+fn bindings_are_distinct(bindings: &ControllerBindings) -> bool {
+    match (&bindings.select, &bindings.start) {
+        (Some(select), Some(start)) => select != start,
+        _ => true,
+    }
+}
+
 static IN_GAME: AtomicBool = AtomicBool::new(false);
 static XMB_DURING_GAME: AtomicBool = AtomicBool::new(false);
 static GAME_SUSPENDED: AtomicBool = AtomicBool::new(false);
@@ -26,6 +58,10 @@ static WAKE_GRACE_UNTIL: AtomicU64 = AtomicU64::new(0);
 static WATCH_ID: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_GAME_PIDS: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
 static TRACKED_GAME_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+static CONTROLLER_BINDINGS: Mutex<ControllerBindings> = Mutex::new(ControllerBindings {
+    select: None,
+    start: None,
+});
 /// The page inside the app's window has the keyboard / controller focus
 /// (told by the page itself on focus / blur).
 static PAGE_FOCUSED: AtomicBool = AtomicBool::new(true);
@@ -35,6 +71,107 @@ fn now_ms() -> u64 {
 }
 #[tauri::command]
 pub fn page_focus(focused: bool) { PAGE_FOCUSED.store(focused, Ordering::Relaxed); }
+
+pub fn load_controller_bindings(app: &AppHandle) {
+    let file = crate::paths::data_dir(app).join("controller_bindings.json");
+    let Ok(text) = std::fs::read_to_string(&file) else { return };
+    match serde_json::from_str::<ControllerBindings>(&text) {
+        Ok(bindings) => {
+            if bindings_are_distinct(&bindings) {
+                *CONTROLLER_BINDINGS.lock().unwrap_or_else(|e| e.into_inner()) = bindings;
+            } else {
+                crate::warn_log!("Ignoring controller button bindings with identical Select and Start buttons.");
+            }
+        }
+        Err(error) => crate::warn_log!("Could not read controller button bindings {}: {error}", file.display()),
+    }
+}
+
+#[tauri::command(async)]
+pub fn calibrate_gamepad_button(app: AppHandle, button: String) -> Result<String, String> {
+    if !matches!(button.as_str(), "select" | "start") {
+        return Err("The controller button to calibrate must be Select or Start.".into());
+    }
+
+    #[cfg(windows)]
+    let captured = {
+        use std::{collections::HashMap, time::{Duration, Instant}};
+        let mut reader = crate::gamepad::Reader::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut previous = HashMap::<String, u32>::new();
+        let mut released = false;
+        let mut captured = None;
+        while Instant::now() < deadline {
+            let samples = reader.poll_sources();
+            if samples.iter().all(|sample| sample.state.raw_buttons == 0) {
+                released = true;
+            }
+            if released {
+                for sample in &samples {
+                    let before = previous.get(&sample.label).copied().unwrap_or(sample.state.raw_buttons);
+                    let pressed = sample.state.raw_buttons & !before;
+                    if pressed.count_ones() == 1 {
+                        captured = Some(CapturedButton { source: sample.label.clone(), mask: pressed });
+                        break;
+                    }
+                }
+            }
+            for sample in samples {
+                previous.insert(sample.label, sample.state.raw_buttons);
+            }
+            if captured.is_some() { break; }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        captured.ok_or_else(|| "No single controller button press was detected. Try again and press only the requested button.".to_string())?
+    };
+    #[cfg(not(windows))]
+    let captured = {
+        let _ = app;
+        return Err("Controller button calibration is only supported on Windows.".into());
+    };
+
+    let mut bindings = CONTROLLER_BINDINGS.lock().map_err(|e| e.to_string())?;
+    let mut updated_bindings = bindings.clone();
+    if button == "select" { updated_bindings.select = Some(captured.clone()); }
+    else { updated_bindings.start = Some(captured.clone()); }
+    if !bindings_are_distinct(&updated_bindings) {
+        return Err("Select and Start cannot use the same controller button. Please calibrate again.".into());
+    }
+    let file = crate::paths::data_dir(&app).join("controller_bindings.json");
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create controller settings directory: {e}"))?;
+    }
+    let text = serde_json::to_string_pretty(&updated_bindings).map_err(|e| e.to_string())?;
+    std::fs::write(&file, text).map_err(|e| format!("Could not save controller button bindings: {e}"))?;
+    *bindings = updated_bindings;
+    crate::log::line("INFO", "gamepad", &format!(
+        "Calibrated {button} as raw 0x{:08X} from {}.",
+        captured.mask, captured.source,
+    ));
+    Ok(format!("{}|{}", captured.source, captured.mask))
+}
+
+#[cfg(test)]
+mod controller_binding_tests {
+    use super::*;
+
+    #[test]
+    fn calibrated_buttons_match_only_their_recorded_source_and_mask() {
+        let binding = Some(CapturedButton { source: "XInput slot 0".into(), mask: 0x20 });
+        assert!(button_pressed(&binding, "XInput slot 0", 0x20, 0, 0x100));
+        assert!(!button_pressed(&binding, "XInput slot 0", 0x40, 0, 0x100));
+        assert!(button_pressed(&binding, "XInput slot 1", 0, 0x100, 0x100));
+    }
+
+    #[test]
+    fn select_and_start_must_not_share_the_same_button() {
+        let button = CapturedButton { source: "WinMM device 2".into(), mask: 0x40 };
+        assert!(!bindings_are_distinct(&ControllerBindings {
+            select: Some(button.clone()),
+            start: Some(button),
+        }));
+    }
+}
 
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn in_game() -> bool { IN_GAME.load(Ordering::Relaxed) }
@@ -65,7 +202,6 @@ pub fn set_game_suspended(suspended: bool) {
 pub fn resume_game() -> Result<(), String> {
     #[cfg(windows)]
     {
-        XMB_DURING_GAME.store(false, Ordering::Relaxed);
         let mut process_ids = TRACKED_GAME_PIDS.lock().map_err(|e| e.to_string())?.clone();
         let safe_pids = ACTIVE_GAME_PIDS.lock().map_err(|e| e.to_string())?.clone();
         for (pid, _) in safe_pids {
@@ -93,6 +229,7 @@ pub fn resume_game() -> Result<(), String> {
         if !focused && !process_ids.contains(&win::foreground_pid().unwrap_or_default()) {
             return Err("Windows did not allow focus to return to the game.".into());
         }
+        XMB_DURING_GAME.store(false, Ordering::Relaxed);
         Ok(())
     }
     #[cfg(not(windows))]
@@ -122,8 +259,15 @@ pub fn bring_to_front(app: &AppHandle) {
     std::thread::spawn(move || {
         for wait in [120u64, 250, 450, 800] {
             std::thread::sleep(std::time::Duration::from_millis(wait));
+            if in_game() && !xmb_during_game() {
+                break;
+            }
             let a = app.clone();
-            let _ = app.run_on_main_thread(move || front_now(&a));
+            let _ = app.run_on_main_thread(move || {
+                if !in_game() || xmb_during_game() {
+                    front_now(&a);
+                }
+            });
         }
     });
 }
@@ -238,39 +382,123 @@ pub fn watch_game(app: AppHandle, pid: Option<u32>, dir: Option<PathBuf>) {
 pub fn start_pad_watch(app: AppHandle) {
     #[cfg(windows)]
     std::thread::spawn(move || {
+        use std::collections::HashMap;
         use std::time::Duration;
         let mut reader = crate::gamepad::Reader::new();
         let mut prev: u32 = 0;
-        let mut game_guide_prev = false;
-        let mut game_chord_prev = false;
+        let mut previous_sources: HashMap<String, (bool, bool, bool, u32)> = HashMap::new();
+        let mut missing_input_reported = false;
+        let mut guide_key_prev = false;
+        let mut quick_menu_key_prev = false;
         let mut stick_was = false;
         let mut last_front = 0u64;
+        let mut last_gamepad_heartbeat = None;
         loop {
             std::thread::sleep(Duration::from_millis(50));
             if crate::browser::session_active() || crate::browser::picker_active() { prev = u32::MAX; continue; }
             if in_game() {
-                let Some(p) = reader.poll() else {
-                    game_guide_prev = false;
-                    game_chord_prev = false;
-                    continue;
+                let samples = reader.poll_sources();
+                let guide_key_down = win::guide_key_down();
+                let keyboard_guide_pressed = guide_key_down && !guide_key_prev;
+                guide_key_prev = guide_key_down;
+                let quick_menu_key_down = win::quick_menu_key_down();
+                let keyboard_quick_menu_pressed = quick_menu_key_down && !quick_menu_key_prev;
+                quick_menu_key_prev = quick_menu_key_down;
+                if samples.is_empty() {
+                    if !missing_input_reported {
+                        crate::log::line("WARN", "gamepad", "No native controller state is available while the game is running.");
+                        missing_input_reported = true;
+                    }
+                    previous_sources.clear();
+                } else {
+                    missing_input_reported = false;
+                }
+
+                let mut guide_pressed = false;
+                let mut chord_pressed = false;
+                let mut trigger_source = if keyboard_quick_menu_pressed {
+                    Some("F14 keyboard shortcut".to_string())
+                } else if keyboard_guide_pressed {
+                    Some("F13 keyboard fallback".to_string())
+                } else {
+                    None
                 };
-                let chord = p.buttons & (crate::gamepad::B_SELECT | crate::gamepad::B_START)
-                    == (crate::gamepad::B_SELECT | crate::gamepad::B_START);
-                let guide_pressed = p.guide && !game_guide_prev;
-                let chord_pressed = chord && !game_chord_prev;
-                game_guide_prev = p.guide;
-                game_chord_prev = chord;
-                if !XMB_DURING_GAME.load(Ordering::Relaxed) && (guide_pressed || chord_pressed) {
+                guide_pressed |= keyboard_guide_pressed;
+                let mut source_states = Vec::with_capacity(samples.len());
+                let bindings = CONTROLLER_BINDINGS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                for sample in &samples {
+                    let state = sample.state;
+                    let select = button_pressed(
+                        &bindings.select, &sample.label, state.raw_buttons, state.buttons, crate::gamepad::B_SELECT,
+                    );
+                    let start = button_pressed(
+                        &bindings.start, &sample.label, state.raw_buttons, state.buttons, crate::gamepad::B_START,
+                    );
+                    let chord = select && start;
+                    let current = (select, start, state.guide, state.raw_buttons);
+                    let previous = previous_sources.insert(sample.label.clone(), current);
+                    let was_chord = previous.map(|(was_select, was_start, _, _)| was_select && was_start).unwrap_or(false);
+                    let was_guide = previous.map(|(_, _, guide, _)| guide).unwrap_or(false);
+                    let source_guide_pressed = state.guide && !was_guide;
+                    guide_pressed |= source_guide_pressed;
+                    chord_pressed |= chord && !was_chord;
+                    if chord && !was_chord {
+                        trigger_source = Some(sample.label.clone());
+                    } else if source_guide_pressed && trigger_source.is_none() {
+                        trigger_source = Some(sample.label.clone());
+                    }
+                    if previous != Some(current) {
+                        crate::log::line("INFO", "gamepad", &format!(
+                            "{} buttons=0x{:08X} raw=0x{:08X} select={} start={} guide={}.",
+                            sample.label,
+                            state.buttons,
+                            state.raw_buttons,
+                            select,
+                            start,
+                            state.guide,
+                        ));
+                    }
+                    source_states.push(format!(
+                        "{}:0x{:08X}/g{}",
+                        sample.label,
+                        state.buttons,
+                        u8::from(state.guide),
+                    ));
+                }
+                previous_sources.retain(|label, _| samples.iter().any(|sample| &sample.label == label));
+                let now = std::time::Instant::now();
+                if last_gamepad_heartbeat.map(|last| now.duration_since(last) >= Duration::from_secs(5)).unwrap_or(true) {
+                    crate::log::line("INFO", "gamepad", &format!(
+                        "Native poll heartbeat: sources=[{}], foreground_pid={:?}.",
+                        if source_states.is_empty() { "none".into() } else { source_states.join(", ") },
+                        win::foreground_pid(),
+                    ));
+                    last_gamepad_heartbeat = Some(now);
+                }
+                if !XMB_DURING_GAME.load(Ordering::Relaxed) && (guide_pressed || chord_pressed || keyboard_quick_menu_pressed) {
                     XMB_DURING_GAME.store(true, Ordering::Relaxed);
-                    let event = if chord_pressed { "game-quick-menu" } else { "game-home" };
-                    let _ = app.emit(event, ());
+                    let open_quick_menu = chord_pressed || keyboard_quick_menu_pressed;
+                    let event = if open_quick_menu { "game-quick-menu" } else { "game-home" };
+                    crate::log::line("INFO", "gamepad", &format!(
+                        "Detected {} from [{}].",
+                        if keyboard_quick_menu_pressed { "F14" }
+                            else if chord_pressed { "Select+Start" }
+                            else if keyboard_guide_pressed { "F13" }
+                            else { "Guide" },
+                        trigger_source.as_deref().unwrap_or("unknown"),
+                    ));
+                    if let Err(error) = app.emit(event, ()) {
+                        crate::log::line("ERROR", "gamepad", &format!("Could not emit {event}: {error}"));
+                    }
                     bring_to_front(&app);
                 }
                 prev = u32::MAX;
                 continue;
             }
-            game_guide_prev = false;
-            game_chord_prev = false;
+            previous_sources.clear();
+            guide_key_prev = false;
+            quick_menu_key_prev = false;
+            last_gamepad_heartbeat = None;
             let Some(w) = app.get_webview_window("main") else { continue };
             let Ok(h) = w.hwnd() else { continue };
             let h = h.0 as isize;
@@ -327,6 +555,7 @@ mod win {
         fn IsIconic(h: HWND) -> BOOL;
         fn AttachThreadInput(a: u32, b: u32, attach: BOOL) -> BOOL;
         fn keybd_event(vk: u8, scan: u8, flags: u32, extra: usize);
+        fn GetAsyncKeyState(vk: i32) -> i16;
     }
     #[link(name = "kernel32")]
     extern "system" {
@@ -346,6 +575,16 @@ mod win {
     const VK_MENU: u8 = 0x12;
     const KEYEVENTF_KEYUP: u32 = 0x2;
     const SW_RESTORE: i32 = 9;
+    const VK_F13: i32 = 0x7C;
+    const VK_F14: i32 = 0x7D;
+
+    pub fn guide_key_down() -> bool {
+        unsafe { GetAsyncKeyState(VK_F13) as u16 & 0x8000 != 0 }
+    }
+
+    pub fn quick_menu_key_down() -> bool {
+        unsafe { GetAsyncKeyState(VK_F14) as u16 & 0x8000 != 0 }
+    }
 
     pub fn force_foreground(h: HWND) {
         if h == 0 { return; }

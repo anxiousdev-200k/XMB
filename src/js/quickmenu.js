@@ -1,7 +1,7 @@
 import { call } from "./api.js";
 
 const ACTIONS = [
-  { id: "resume", label: "Resume Game" },
+  { id: "quit", label: "Quit Game" },
   { id: "volume", label: "System Volume" },
   { id: "output", label: "Switch Output Device" },
   { id: "sleep", label: "Enter Rest Mode" },
@@ -9,9 +9,10 @@ const ACTIONS = [
 ];
 
 export class GameQuickMenu {
-  constructor(audio, { onResume, onShutdown }) {
+  constructor(audio, { onResume, onQuit, onShutdown }) {
     this.audio = audio;
     this.onResume = onResume;
+    this.onQuit = onQuit;
     this.onShutdown = onShutdown;
     this.el = document.getElementById("quickmenu");
     this.selected = 0;
@@ -35,7 +36,7 @@ export class GameQuickMenu {
     </div>
     <div class="confirm-foot quickmenu-foot">
       <span class="cf-hint"><span class="cf-glyph cf-x">✕</span>Select</span>
-      <span class="cf-hint"><span class="cf-glyph cf-o">○</span>Resume Game</span>
+      <span class="cf-hint"><span class="cf-glyph cf-o">○</span>Go Back</span>
       <span class="cf-hint">← → Volume</span>
     </div>`;
     this.el.querySelector(".quickmenu-status").textContent = this.outputStatus;
@@ -59,7 +60,7 @@ export class GameQuickMenu {
     this.activating = true;
     try {
       switch (ACTIONS[this.selected].id) {
-        case "resume": this.onResume(); break;
+        case "quit": this.close(); this.onQuit(); break;
         case "volume": await this.adjustVolume(1); break;
         case "output":
           try {
